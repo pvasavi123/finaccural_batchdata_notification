@@ -20,4 +20,12 @@ router.get(['/classes', '/classes/'],           authenticate, controller.getClas
 router.get(['/locations', '/locations/'],       authenticate, controller.getLocations);
 router.get(['/organisation', '/organisation/'], authenticate, controller.getOrganisation);
 
+// Connection endpoints
+router.get('/connections', authenticate, controller.listConnections);
+router.get('/connections/stats', authenticate, controller.getConnectionStats);
+router.delete('/connections/:id', authenticate, controller.disconnectConnection);
+router.post('/connections/:id/activate', authenticate, controller.activateConnection);
+router.patch('/connections/:id/rename', authenticate, controller.renameConnection);
+router.get('/pull-master-data', authenticate, controller.pullMasterData);
+
 module.exports = router;

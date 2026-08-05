@@ -244,6 +244,124 @@ class QuickbooksController {
             next(error);
         }
     };
+
+    /**
+     * GET /api/quickbooks/connections
+     */
+    listConnections = async (req, res, next) => {
+        try {
+            const mail = req.query.mail
+                || req.session?.user_mail
+                || req.session?.admin?.email
+                || req.session?.googleUser?.email
+                || null;
+
+            const list = await QuickBooksService.listConnections(mail);
+            return res.json(list);
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * GET /api/quickbooks/connections/stats
+     */
+    getConnectionStats = async (req, res, next) => {
+        try {
+            const mail = req.query.mail || req.session?.user_mail || null;
+            const plan = req.query.plan || 'pro';
+
+            const stats = {
+                plan: plan.toLowerCase(),
+                maxPerPlatform: 10,
+                quickbooks: { connected: 0, remaining: 10 }
+            };
+
+            if (plan === 'basic')    stats.maxPerPlatform = 1;
+            else if (plan === 'standard') stats.maxPerPlatform = 3;
+
+            const qbStats = await QuickBooksService.getConnectionStats(mail, plan);
+            stats.quickbooks = {
+                connected: qbStats.connected,
+                remaining: qbStats.remaining
+            };
+
+            return res.json(stats);
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * DELETE /api/quickbooks/connections/:id
+     */
+    disconnectConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const success = await QuickBooksService.disconnectConnection(companyId);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * POST /api/quickbooks/connections/:id/activate
+     */
+    activateConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const success = await QuickBooksService.activateConnection(companyId);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * PATCH /api/quickbooks/connections/:id/rename
+     */
+    renameConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const { companyName } = req.body;
+            if (!companyName) {
+                throw new ValidationError('companyName is required.');
+            }
+
+            const success = await QuickBooksService.renameConnection(companyId, companyName);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * GET /api/quickbooks/pull-master-data?companyId=...&tier=...
+     */
+    pullMasterData = async (req, res, next) => {
+        try {
+            const { companyId, tier } = req.query;
+            
+            const aggregated = await QuickBooksService.pullMasterData(companyId, tier);
+
+            if (!aggregated) {
+                const { AppError } = require('../../core/errors/AppError');
+                throw new AppError('The requested resource was not found.', 404, 'ERR_NOT_FOUND', `No active connections found for quickbooks.`);
+            }
+
+            return res.json({
+                company:   aggregated.company.length === 1 ? aggregated.company[0] : aggregated.company,
+                customers: aggregated.customers,
+                vendors:   aggregated.vendors,
+                accounts:  aggregated.accounts,
+                classes:   aggregated.classes,
+                locations: aggregated.locations
+            });
+        } catch (err) {
+            return next(err);
+        }
+    };
 }
 
 module.exports = new QuickbooksController();

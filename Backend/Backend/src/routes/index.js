@@ -61,9 +61,9 @@ router.get('/google/callback',   authController.googleCallback);
 router.get('/microsoft/connect', authController.microsoftConnect);
 router.get('/microsoft/callback', authController.microsoftCallback);
 
-
 const { authenticate } = require('../modules/auth/auth.middleware');
 
+// ── Dynamic Connections Routes ────────────────────────────────────
 // ── Dynamic Connections Routes ────────────────────────────────────
 
 // GET /api/connections
@@ -213,8 +213,6 @@ router.patch('/connections/:id/rename', authenticate, async (req, res, next) => 
 });
 
 // GET /api/pull-master-data?companyId=...&platform=...&tier=...
-// A read — fetches the current data from QuickBooks/Xero — so GET with
-// query params rather than POST with a body.
 router.get('/pull-master-data', authenticate, async (req, res, next) => {
     try {
         const { companyId, platform, tier } = req.query;
@@ -236,13 +234,6 @@ router.get('/pull-master-data', authenticate, async (req, res, next) => {
         if (!aggregated) {
             throw new AppError('The requested resource was not found.', 404, 'ERR_NOT_FOUND', `No active connections found for ${platform}.`);
         }
-
-        // This runs on the backend Node process, so this log shows up in
-        // the server's terminal (not the browser console).
-        const companyName = aggregated.company.length === 1
-            ? (aggregated.company[0].name || aggregated.company[0].companyName || companyId)
-            : aggregated.company.map(c => c.name || c.companyName).join(', ');
-
 
         return res.json({
             company:   aggregated.company.length === 1 ? aggregated.company[0] : aggregated.company,

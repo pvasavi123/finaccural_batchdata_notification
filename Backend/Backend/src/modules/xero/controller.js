@@ -657,6 +657,124 @@ class XeroController {
             next(err);
         }
     };
+
+    /**
+     * GET /api/xero/connections
+     */
+    listConnections = async (req, res, next) => {
+        try {
+            const mail = req.query.mail
+                || req.session?.user_mail
+                || req.session?.admin?.email
+                || req.session?.googleUser?.email
+                || null;
+
+            const list = await XeroService.listConnections(mail);
+            return res.json(list);
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * GET /api/xero/connections/stats
+     */
+    getConnectionStats = async (req, res, next) => {
+        try {
+            const mail = req.query.mail || req.session?.user_mail || null;
+            const plan = req.query.plan || 'pro';
+
+            const stats = {
+                plan: plan.toLowerCase(),
+                maxPerPlatform: 10,
+                xero:       { connected: 0, remaining: 10 }
+            };
+
+            if (plan === 'basic')    stats.maxPerPlatform = 1;
+            else if (plan === 'standard') stats.maxPerPlatform = 3;
+
+            const xeroStats = await XeroService.getConnectionStats(mail, plan);
+            stats.xero = {
+                connected: xeroStats.connected,
+                remaining: xeroStats.remaining
+            };
+
+            return res.json(stats);
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * DELETE /api/xero/connections/:id
+     */
+    disconnectConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const success = await XeroService.disconnectConnection(companyId);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * POST /api/xero/connections/:id/activate
+     */
+    activateConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const success = await XeroService.activateConnection(companyId);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * PATCH /api/xero/connections/:id/rename
+     */
+    renameConnection = async (req, res, next) => {
+        try {
+            const companyId = req.params.id;
+            const { companyName } = req.body;
+            if (!companyName) {
+                throw new ValidationError('companyName is required.');
+            }
+
+            const success = await XeroService.renameConnection(companyId, companyName);
+            return res.json({ success: !!success });
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+    /**
+     * GET /api/xero/pull-master-data?companyId=...&tier=...
+     */
+    pullMasterData = async (req, res, next) => {
+        try {
+            const { companyId, tier } = req.query;
+            
+            const aggregated = await XeroService.pullMasterData(companyId, tier);
+
+            if (!aggregated) {
+                const { AppError } = require('../../core/errors/AppError');
+                throw new AppError('The requested resource was not found.', 404, 'ERR_NOT_FOUND', `No active connections found for xero.`);
+            }
+
+            return res.json({
+                company:   aggregated.company.length === 1 ? aggregated.company[0] : aggregated.company,
+                customers: aggregated.customers,
+                vendors:   aggregated.vendors,
+                accounts:  aggregated.accounts,
+                classes:   aggregated.classes,
+                locations: aggregated.locations
+            });
+        } catch (err) {
+            return next(err);
+        }
+    };
 }
 
 module.exports = new XeroController();
