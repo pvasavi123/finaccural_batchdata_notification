@@ -6,17 +6,20 @@ class QuickBooksTokenRepository extends IOAuthTokenRepository {
         const token = await QuickBooksToken.findOne({ where: { realm_id: realmId } });
         if (!token) return null;
 
-        // Access token expiry: calculated from updatedAt + expires_in seconds
-        const expiresAt = new Date(token.updated_at.getTime() + token.expires_in * 1000);
+        // If expires_in is small (e.g., 3600), it's from the old format. 
+        // We calculate expiresAt relative to updated_at. If it's a large timestamp, we use it directly.
+        const isOldFormat = token.expires_in < 1000000000;
+        const expiresAt = isOldFormat 
+            ? new Date(token.updated_at.getTime() + token.expires_in * 1000)
+            : new Date(token.expires_in * 1000);
 
         // Refresh token expiry: QuickBooks refresh tokens live for 100 days.
-        // x_refresh_token_expires_in is stored in seconds from when the token was issued.
-        // We recalculate from created_at (tokens are re-issued on every refresh).
         let refreshTokenExpiresAt = null;
         if (token.x_refresh_token_expires_in && token.x_refresh_token_expires_in > 0) {
-            refreshTokenExpiresAt = new Date(
-                token.updated_at.getTime() + token.x_refresh_token_expires_in * 1000
-            );
+            const isRefreshOldFormat = token.x_refresh_token_expires_in < 1000000000;
+            refreshTokenExpiresAt = isRefreshOldFormat
+                ? new Date(token.updated_at.getTime() + token.x_refresh_token_expires_in * 1000)
+                : new Date(token.x_refresh_token_expires_in * 1000);
         }
 
         return {
@@ -29,18 +32,15 @@ class QuickBooksTokenRepository extends IOAuthTokenRepository {
     }
 
     async saveToken(realmId, { accessToken, refreshToken, expiresAt, refreshTokenExpiresIn }) {
-        // Calculate expires_in relative to now
-        const expiresIn = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
-
         const updatePayload = {
             access_token:  accessToken,
             refresh_token: refreshToken,
-            expires_in:    expiresIn
+            expires_in:    Math.floor(expiresAt.getTime() / 1000) // Store absolute UNIX timestamp
         };
 
         // Persist the refresh token lifetime when provided by the OAuth response
         if (refreshTokenExpiresIn != null && refreshTokenExpiresIn > 0) {
-            updatePayload.x_refresh_token_expires_in = refreshTokenExpiresIn;
+            updatePayload.x_refresh_token_expires_in = Math.floor(Date.now() / 1000) + refreshTokenExpiresIn;
         }
 
         await QuickBooksToken.update(updatePayload, {
