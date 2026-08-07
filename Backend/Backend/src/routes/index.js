@@ -67,13 +67,15 @@ const { authenticate } = require('../modules/auth/auth.middleware');
 // ── Dynamic Connections Routes ────────────────────────────────────
 
 // GET /api/connections
+// The owning email is taken exclusively from the verified JWT
+// (req.user.email, set by `authenticate`) — never from req.query.mail.
+// Trusting a client-suppliable query param here would let any
+// authenticated user list (and, via the endpoints below, disconnect/
+// activate/rename/pull data for) another user's ERP connections just by
+// passing their email.
 router.get('/connections', authenticate, async (req, res, next) => {
     try {
-        const mail = req.query.mail
-            || req.session?.user_mail
-            || req.session?.admin?.email
-            || req.session?.googleUser?.email
-            || null;
+        const mail = req.user.email;
 
         const list = [];
         
@@ -98,7 +100,7 @@ router.get('/connections', authenticate, async (req, res, next) => {
 // GET /api/connections/stats
 router.get('/connections/stats', authenticate, async (req, res, next) => {
     try {
-        const mail = req.query.mail || req.session?.user_mail || null;
+        const mail = req.user.email;
         const plan = req.query.plan || 'pro';
 
         const stats = {
@@ -136,20 +138,25 @@ router.get('/connections/stats', authenticate, async (req, res, next) => {
 });
 
 // DELETE /api/connections/:id
+// `mail` (req.user.email) is passed through to the service layer so the
+// update can only ever match a row this user actually owns — otherwise
+// any authenticated user could disconnect another user's company just by
+// knowing/guessing its companyId.
 router.delete('/connections/:id', authenticate, async (req, res, next) => {
     try {
         const companyId = req.params.id;
+        const mail = req.user.email;
         let success = false;
 
         if (quickbooksRoutes) {
             const QuickBooksService = require('../modules/quickbooks/service');
-            const qbSuccess = await QuickBooksService.disconnectConnection(companyId);
+            const qbSuccess = await QuickBooksService.disconnectConnection(companyId, mail);
             if (qbSuccess) success = true;
         }
 
         if (!success && xeroRoutes) {
             const XeroService = require('../modules/xero/service');
-            const xeroSuccess = await XeroService.disconnectConnection(companyId);
+            const xeroSuccess = await XeroService.disconnectConnection(companyId, mail);
             if (xeroSuccess) success = true;
         }
 
@@ -160,20 +167,22 @@ router.delete('/connections/:id', authenticate, async (req, res, next) => {
 });
 
 // POST /api/connections/:id/activate
+// Same ownership scoping as DELETE above.
 router.post('/connections/:id/activate', authenticate, async (req, res, next) => {
     try {
         const companyId = req.params.id;
+        const mail = req.user.email;
         let success = false;
 
         if (quickbooksRoutes) {
             const QuickBooksService = require('../modules/quickbooks/service');
-            const qbSuccess = await QuickBooksService.activateConnection(companyId);
+            const qbSuccess = await QuickBooksService.activateConnection(companyId, mail);
             if (qbSuccess) success = true;
         }
 
         if (!success && xeroRoutes) {
             const XeroService = require('../modules/xero/service');
-            const xeroSuccess = await XeroService.activateConnection(companyId);
+            const xeroSuccess = await XeroService.activateConnection(companyId, mail);
             if (xeroSuccess) success = true;
         }
 
@@ -184,9 +193,11 @@ router.post('/connections/:id/activate', authenticate, async (req, res, next) =>
 });
 
 // PATCH /api/connections/:id/rename
+// Same ownership scoping as DELETE above.
 router.patch('/connections/:id/rename', authenticate, async (req, res, next) => {
     try {
         const companyId = req.params.id;
+        const mail = req.user.email;
         const { companyName } = req.body;
         if (!companyName) {
             throw new ValidationError('companyName is required.');
@@ -196,13 +207,13 @@ router.patch('/connections/:id/rename', authenticate, async (req, res, next) => 
 
         if (quickbooksRoutes) {
             const QuickBooksService = require('../modules/quickbooks/service');
-            const qbSuccess = await QuickBooksService.renameConnection(companyId, companyName);
+            const qbSuccess = await QuickBooksService.renameConnection(companyId, mail, companyName);
             if (qbSuccess) success = true;
         }
 
         if (!success && xeroRoutes) {
             const XeroService = require('../modules/xero/service');
-            const xeroSuccess = await XeroService.renameConnection(companyId, companyName);
+            const xeroSuccess = await XeroService.renameConnection(companyId, mail, companyName);
             if (xeroSuccess) success = true;
         }
 
@@ -213,6 +224,8 @@ router.patch('/connections/:id/rename', authenticate, async (req, res, next) => 
 });
 
 // GET /api/pull-master-data?companyId=...&platform=...&tier=...
+// Same ownership scoping — a companyId this user doesn't own returns "not
+// found" rather than silently pulling and returning another user's data.
 router.get('/pull-master-data', authenticate, async (req, res, next) => {
     try {
         const { companyId, platform, tier } = req.query;
@@ -220,15 +233,16 @@ router.get('/pull-master-data', authenticate, async (req, res, next) => {
             throw new ValidationError('Missing platform.');
         }
 
+        const mail = req.user.email;
         const normPlatform = platform.toLowerCase();
         let aggregated = null;
 
         if (normPlatform === 'quickbooks' && quickbooksRoutes) {
             const QuickBooksService = require('../modules/quickbooks/service');
-            aggregated = await QuickBooksService.pullMasterData(companyId, tier);
+            aggregated = await QuickBooksService.pullMasterData(companyId, tier, mail);
         } else if (normPlatform === 'xero' && xeroRoutes) {
             const XeroService = require('../modules/xero/service');
-            aggregated = await XeroService.pullMasterData(companyId, tier);
+            aggregated = await XeroService.pullMasterData(companyId, tier, mail);
         }
 
         if (!aggregated) {

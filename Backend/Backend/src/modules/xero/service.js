@@ -171,21 +171,25 @@ class XeroService {
     }
 
     /**
-     * Helper to get list of active tokens for all connected tenants.
+     * Helper to get list of active tokens for the calling user's connected
+     * tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are returned.
      * @returns {Promise<Array>}
      */
-    static async getAllTokens() {
-        const tokens = await XeroTokenRepository.getActiveTokens();
+    static async getAllTokens(mail) {
+        const tokens = await XeroTokenRepository.getActiveTokens(mail);
         if (!tokens || tokens.length === 0) throw new Error('Xero account is not connected.');
         return tokens;
     }
 
     /**
-     * Fetch all organisation details from Xero across all connected tenants.
+     * Fetch all organisation details from Xero across the calling user's
+     * connected tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are queried.
      * @returns {Promise<Array>}
      */
-    static async getOrganisation() {
-        const tokens = await XeroService.getAllTokens();
+    static async getOrganisation(mail) {
+        const tokens = await XeroService.getAllTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const tenantId = token.companyId || token.tenant_id;
@@ -212,11 +216,13 @@ class XeroService {
     }
 
     /**
-     * Fetch all contacts from Xero across all connected tenants.
+     * Fetch all contacts from Xero across the calling user's connected
+     * tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are queried.
      * @returns {Promise<ContactDTO[]>}
      */
-    static async getContacts() {
-        const tokens = await XeroService.getAllTokens();
+    static async getContacts(mail) {
+        const tokens = await XeroService.getAllTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const tenantId = token.companyId || token.tenant_id;
@@ -251,11 +257,13 @@ class XeroService {
     }
 
     /**
-     * Fetch all accounts from Xero across all connected tenants.
+     * Fetch all accounts from Xero across the calling user's connected
+     * tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are queried.
      * @returns {Promise<AccountDTO[]>}
      */
-    static async getAccounts() {
-        const tokens = await XeroService.getAllTokens();
+    static async getAccounts(mail) {
+        const tokens = await XeroService.getAllTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const tenantId = token.companyId || token.tenant_id;
@@ -290,11 +298,13 @@ class XeroService {
     }
 
     /**
-     * Fetch tracking categories for classes from Xero across all connected tenants.
+     * Fetch tracking categories for classes from Xero across the calling
+     * user's connected tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are queried.
      * @returns {Promise<ClassDTO[]>}
      */
-    static async getClasses() {
-        const tokens = await XeroService.getAllTokens();
+    static async getClasses(mail) {
+        const tokens = await XeroService.getAllTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const tenantId = token.companyId || token.tenant_id;
@@ -329,11 +339,13 @@ class XeroService {
     }
 
     /**
-     * Fetch tracking categories for locations from Xero across all connected tenants.
+     * Fetch tracking categories for locations from Xero across the calling
+     * user's connected tenants only.
+     * @param {string} [mail] - Owning user's email; scopes which tenants are queried.
      * @returns {Promise<LocationDTO[]>}
      */
-    static async getLocations() {
-        const tokens = await XeroService.getAllTokens();
+    static async getLocations(mail) {
+        const tokens = await XeroService.getAllTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const tenantId = token.companyId || token.tenant_id;
@@ -411,16 +423,30 @@ class XeroService {
         };
     }
 
-    static async disconnectConnection(companyId) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required: without it this
+     *   would disconnect a company regardless of who owns it, letting any
+     *   authenticated user tear down another user's connection just by
+     *   knowing/guessing its companyId.
+     */
+    static async disconnectConnection(companyId, mail) {
+        if (!mail) return false;
         const { XeroToken } = require('../../core/database');
         const [updated] = await XeroToken.update(
             { status: 'Disconnected' },
-            { where: { tenant_id: companyId } }
+            { where: { tenant_id: companyId, mail } }
         );
         return updated > 0;
     }
 
-    static async activateConnection(companyId) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required — see
+     *   disconnectConnection() above for why an ownership check matters here.
+     */
+    static async activateConnection(companyId, mail) {
+        if (!mail) return false;
         const { XeroToken } = require('../../core/database');
         const { Op } = require('sequelize');
 
@@ -430,27 +456,44 @@ class XeroService {
         // (see pullMasterData).
         const [updated] = await XeroToken.update(
             { status: 'Active' },
-            { where: { tenant_id: companyId, status: { [Op.ne]: 'Not Synced' } } }
+            { where: { tenant_id: companyId, mail, status: { [Op.ne]: 'Not Synced' } } }
         );
         if (updated > 0) return true;
 
         // If nothing matched, the row might legitimately be 'Not Synced'
-        // (or simply not exist) — confirm it exists so the caller still
-        // gets a truthy result for "this company is now the active one".
-        const existing = await XeroToken.findOne({ where: { tenant_id: companyId } });
+        // (or simply not exist) — confirm it exists (and is owned by this
+        // user) so the caller still gets a truthy result for "this company
+        // is now the active one".
+        const existing = await XeroToken.findOne({ where: { tenant_id: companyId, mail } });
         return !!existing;
     }
 
-    static async renameConnection(companyId, companyName) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required — see
+     *   disconnectConnection() above for why an ownership check matters here.
+     */
+    static async renameConnection(companyId, mail, companyName) {
+        if (!mail) return false;
         const { XeroToken } = require('../../core/database');
         const [updated] = await XeroToken.update(
             { company_name: companyName },
-            { where: { tenant_id: companyId } }
+            { where: { tenant_id: companyId, mail } }
         );
         return updated > 0;
     }
 
-    static async pullMasterData(companyId, tier) {
+    /**
+     * @param {string} companyId
+     * @param {string} tier
+     * @param {string} mail - Owning user's email. Required — without it a
+     *   companyId-scoped pull would return (and let this user overwrite
+     *   their Excel sheet with) another user's financial data, and a
+     *   bulk (no companyId) pull would aggregate every user's connections
+     *   in the system into one response.
+     */
+    static async pullMasterData(companyId, tier, mail) {
+        if (!mail) return null;
         const { XeroToken } = require('../../core/database');
         const { Op } = require('sequelize');
         const maxAllowed = XeroService.getMaxConnections(tier);
@@ -458,10 +501,12 @@ class XeroService {
         // Include 'Not Synced' connections (not just 'Active') so a
         // freshly connected organisation that has never been pulled yet
         // is still eligible for this — and only this pull is what
-        // transitions it to 'Active' below.
+        // transitions it to 'Active' below. Both branches are scoped to
+        // `mail` so this can only ever touch the calling user's own
+        // organisations.
         const rawTokens = companyId
-            ? await XeroToken.findAll({ where: { tenant_id: companyId } })
-            : await XeroToken.findAll({ where: { status: { [Op.ne]: 'Disconnected' } }, order: [['updated_at', 'DESC']] });
+            ? await XeroToken.findAll({ where: { tenant_id: companyId, mail } })
+            : await XeroToken.findAll({ where: { mail, status: { [Op.ne]: 'Disconnected' } }, order: [['updated_at', 'DESC']] });
 
         const tokens = rawTokens.slice(0, maxAllowed).map(t => ({
             platform:    'xero',

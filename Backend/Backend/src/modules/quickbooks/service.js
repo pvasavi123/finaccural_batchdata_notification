@@ -168,11 +168,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch company info and return clean CompanyDTO for a specific token or all tokens.
+     * Fetch company info and return clean CompanyDTO for a specific token or
+     * all of the calling user's tokens.
      * @param {object} [token]
+     * @param {string} [mail] - Owning user's email; scopes which companies are queried when `token` isn't given.
      * @returns {CompanyDTO|CompanyDTO[]|null}
      */
-    static async getCompanyInfo(token) {
+    static async getCompanyInfo(token, mail) {
         if (token) {
             try {
                 const raw = await QuickBooksService.executeQuery('SELECT * FROM CompanyInfo', token);
@@ -182,7 +184,7 @@ class QuickBooksService {
             }
         }
 
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         if (!tokens || tokens.length === 0) return null;
 
         const companyResults = await Promise.all(tokens.map(async (t) => {
@@ -215,11 +217,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch all customers and return clean CustomerDTOs across all connected companies.
+     * Fetch all customers and return clean CustomerDTOs across the calling
+     * user's connected companies only.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
      * @returns {CustomerDTO[]}
      */
-    static async getCustomers() {
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+    static async getCustomers(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const raw = await QuickBooksService.queryAll('Customer', token);
@@ -240,11 +244,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch all vendors and return clean VendorDTOs across all connected companies.
+     * Fetch all vendors and return clean VendorDTOs across the calling
+     * user's connected companies only.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
      * @returns {VendorDTO[]}
      */
-    static async getVendors() {
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+    static async getVendors(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const raw = await QuickBooksService.queryAll('Vendor', token);
@@ -265,11 +271,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch all accounts and return clean AccountDTOs across all connected companies.
+     * Fetch all accounts and return clean AccountDTOs across the calling
+     * user's connected companies only.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
      * @returns {AccountDTO[]}
      */
-    static async getAccounts() {
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+    static async getAccounts(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const raw = await QuickBooksService.queryAll('Account', token);
@@ -290,11 +298,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch all classes and return clean ClassDTOs across all connected companies.
+     * Fetch all classes and return clean ClassDTOs across the calling
+     * user's connected companies only.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
      * @returns {ClassDTO[]}
      */
-    static async getClasses() {
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+    static async getClasses(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const raw = await QuickBooksService.queryAll('Class', token);
@@ -315,11 +325,13 @@ class QuickBooksService {
     }
 
     /**
-     * Fetch all locations (departments) and return clean LocationDTOs across all connected companies.
+     * Fetch all locations (departments) and return clean LocationDTOs
+     * across the calling user's connected companies only.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
      * @returns {LocationDTO[]}
      */
-    static async getLocations() {
-        const tokens = await QuickBooksTokenRepository.getActiveTokens();
+    static async getLocations(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const raw = await QuickBooksService.queryAll('Department', token);
@@ -380,16 +392,30 @@ class QuickBooksService {
         };
     }
 
-    static async disconnectConnection(companyId) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required: without it this
+     *   would disconnect a company regardless of who owns it, letting any
+     *   authenticated user tear down another user's connection just by
+     *   knowing/guessing its companyId.
+     */
+    static async disconnectConnection(companyId, mail) {
+        if (!mail) return false;
         const { QuickBooksToken } = require('../../core/database');
         const [updated] = await QuickBooksToken.update(
             { status: 'Disconnected' },
-            { where: { realm_id: companyId } }
+            { where: { realm_id: companyId, mail } }
         );
         return updated > 0;
     }
 
-    static async activateConnection(companyId) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required — see
+     *   disconnectConnection() above for why an ownership check matters here.
+     */
+    static async activateConnection(companyId, mail) {
+        if (!mail) return false;
         const { QuickBooksToken } = require('../../core/database');
         const { Op } = require('sequelize');
 
@@ -399,27 +425,44 @@ class QuickBooksService {
         // (see pullMasterData).
         const [updated] = await QuickBooksToken.update(
             { status: 'Active' },
-            { where: { realm_id: companyId, status: { [Op.ne]: 'Not Synced' } } }
+            { where: { realm_id: companyId, mail, status: { [Op.ne]: 'Not Synced' } } }
         );
         if (updated > 0) return true;
 
         // If nothing matched, the row might legitimately be 'Not Synced'
-        // (or simply not exist) — confirm it exists so the caller still
-        // gets a truthy result for "this company is now the active one".
-        const existing = await QuickBooksToken.findOne({ where: { realm_id: companyId } });
+        // (or simply not exist) — confirm it exists (and is owned by this
+        // user) so the caller still gets a truthy result for "this company
+        // is now the active one".
+        const existing = await QuickBooksToken.findOne({ where: { realm_id: companyId, mail } });
         return !!existing;
     }
 
-    static async renameConnection(companyId, companyName) {
+    /**
+     * @param {string} companyId
+     * @param {string} mail - Owning user's email. Required — see
+     *   disconnectConnection() above for why an ownership check matters here.
+     */
+    static async renameConnection(companyId, mail, companyName) {
+        if (!mail) return false;
         const { QuickBooksToken } = require('../../core/database');
         const [updated] = await QuickBooksToken.update(
             { company_name: companyName },
-            { where: { realm_id: companyId } }
+            { where: { realm_id: companyId, mail } }
         );
         return updated > 0;
     }
 
-    static async pullMasterData(companyId, tier) {
+    /**
+     * @param {string} companyId
+     * @param {string} tier
+     * @param {string} mail - Owning user's email. Required — without it a
+     *   companyId-scoped pull would return (and let this user overwrite
+     *   their Excel sheet with) another user's financial data, and a
+     *   bulk (no companyId) pull would aggregate every user's connections
+     *   in the system into one response.
+     */
+    static async pullMasterData(companyId, tier, mail) {
+        if (!mail) return null;
         const { QuickBooksToken } = require('../../core/database');
         const { Op } = require('sequelize');
         const maxAllowed = QuickBooksService.getMaxConnections(tier);
@@ -428,10 +471,12 @@ class QuickBooksService {
         // pull — a revoked/expired connection stops being retried
         // automatically the moment it's marked disconnected; it only comes
         // back once the user reconnects. 'Not Synced' connections are still
-        // included since they've never had a chance to sync yet.
+        // included since they've never had a chance to sync yet. Both
+        // branches are scoped to `mail` so this can only ever touch the
+        // calling user's own companies.
         const rawTokens = companyId
-            ? await QuickBooksToken.findAll({ where: { realm_id: companyId } })
-            : await QuickBooksToken.findAll({ where: { status: { [Op.ne]: 'Disconnected' } }, order: [['updated_at', 'DESC']] });
+            ? await QuickBooksToken.findAll({ where: { realm_id: companyId, mail } })
+            : await QuickBooksToken.findAll({ where: { mail, status: { [Op.ne]: 'Disconnected' } }, order: [['updated_at', 'DESC']] });
 
         const tokens = rawTokens.slice(0, maxAllowed).map(t => ({
             platform:     'quickbooks',

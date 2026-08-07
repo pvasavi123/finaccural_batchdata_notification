@@ -23,14 +23,20 @@ class XeroController {
     /**
      * GET /api/xero/connect
      * Generates the Xero OAuth authorization URL and redirects.
+     *
+     * Requires authentication (the frontend passes the JWT as ?token=...
+     * since this is a browser navigation, not a fetch). The owning email
+     * is taken exclusively from the verified token (req.user.email), never
+     * from a client-suppliable query param — otherwise anyone could
+     * initiate a connect flow tagged with someone else's email and inject
+     * a connection into that other user's account.
      */
     connectXero = async (req, res, next) => {
         try {
             const { XeroToken } = require('../../core/database');
-            const mail = req.query.mail || req.session?.user_mail || req.session?.admin?.email || req.session?.googleUser?.email || null;
+            const mail = req.user.email;
             const { Op } = require('sequelize');
-            const whereClause = { status: { [Op.ne]: 'Disconnected' } };
-            if (mail) whereClause.mail = mail;
+            const whereClause = { status: { [Op.ne]: 'Disconnected' }, mail };
             const xeroCount = await XeroToken.count({ where: whereClause });
             const tier = (req.query.tier || 'pro').toLowerCase();
 
@@ -54,7 +60,7 @@ class XeroController {
 
             const state = generateOAuthState();
             req.session.xero_state = state;
-            req.session.user_mail  = req.query.mail || null;
+            req.session.user_mail  = mail;
             req.session.xero_tier  = tier;
             req.session.xero_max_allowed = maxAllowed;
 
@@ -569,11 +575,11 @@ class XeroController {
 
     /**
      * POST /api/xero/disconnect
-     * Clears all stored Xero tokens.
+     * Clears the authenticated user's own stored Xero tokens only.
      */
     disconnectXero = async (req, res, next) => {
         try {
-            await XeroTokenRepository.clearTokens();
+            await XeroTokenRepository.clearTokens(req.user.email);
             res.json({ success: true, message: 'Xero tokens cleared successfully.' });
         } catch (error) {
             next(error);
@@ -582,11 +588,11 @@ class XeroController {
 
     /**
      * GET /api/xero/tokens
-     * Returns all stored Xero OAuth tokens (for debugging).
+     * Returns the authenticated user's own stored Xero OAuth tokens.
      */
     listXeroTokens = async (req, res, next) => {
         try {
-            const tokens = await XeroTokenRepository.getAllTokens();
+            const tokens = await XeroTokenRepository.getAllTokens(req.user.email);
             res.json({ success: true, tokens });
         } catch (err) {
             next(err);
@@ -595,11 +601,11 @@ class XeroController {
 
     /**
      * GET /api/xero/contacts
-     * Returns a list of mapped ContactDTOs.
+     * Returns a list of mapped ContactDTOs for the authenticated user's tenants.
      */
     getContacts = async (req, res, next) => {
         try {
-            const contacts = await XeroService.getContacts();
+            const contacts = await XeroService.getContacts(req.user.email);
             res.json({ contacts });
         } catch (err) {
             next(err);
@@ -608,11 +614,11 @@ class XeroController {
 
     /**
      * GET /api/xero/accounts
-     * Returns a list of mapped AccountDTOs.
+     * Returns a list of mapped AccountDTOs for the authenticated user's tenants.
      */
     getAccounts = async (req, res, next) => {
         try {
-            const accounts = await XeroService.getAccounts();
+            const accounts = await XeroService.getAccounts(req.user.email);
             res.json({ accounts });
         } catch (err) {
             next(err);
@@ -621,11 +627,11 @@ class XeroController {
 
     /**
      * GET /api/xero/classes
-     * Returns a list of mapped ClassDTOs.
+     * Returns a list of mapped ClassDTOs for the authenticated user's tenants.
      */
     getClasses = async (req, res, next) => {
         try {
-            const classes = await XeroService.getClasses();
+            const classes = await XeroService.getClasses(req.user.email);
             res.json({ classes });
         } catch (err) {
             next(err);
@@ -634,11 +640,11 @@ class XeroController {
 
     /**
      * GET /api/xero/locations
-     * Returns a list of mapped LocationDTOs.
+     * Returns a list of mapped LocationDTOs for the authenticated user's tenants.
      */
     getLocations = async (req, res, next) => {
         try {
-            const locations = await XeroService.getLocations();
+            const locations = await XeroService.getLocations(req.user.email);
             res.json({ locations });
         } catch (err) {
             next(err);
@@ -647,11 +653,11 @@ class XeroController {
 
     /**
      * GET /api/xero/organisation
-     * Returns organisation info.
+     * Returns organisation info for the authenticated user's tenants.
      */
     getOrganisation = async (req, res, next) => {
         try {
-            const organisation = await XeroService.getOrganisation();
+            const organisation = await XeroService.getOrganisation(req.user.email);
             res.json({ organisation });
         } catch (err) {
             next(err);
@@ -663,12 +669,7 @@ class XeroController {
      */
     listConnections = async (req, res, next) => {
         try {
-            const mail = req.query.mail
-                || req.session?.user_mail
-                || req.session?.admin?.email
-                || req.session?.googleUser?.email
-                || null;
-
+            const mail = req.user.email;
             const list = await XeroService.listConnections(mail);
             return res.json(list);
         } catch (err) {
@@ -681,7 +682,7 @@ class XeroController {
      */
     getConnectionStats = async (req, res, next) => {
         try {
-            const mail = req.query.mail || req.session?.user_mail || null;
+            const mail = req.user.email;
             const plan = req.query.plan || 'pro';
 
             const stats = {
@@ -711,7 +712,7 @@ class XeroController {
     disconnectConnection = async (req, res, next) => {
         try {
             const companyId = req.params.id;
-            const success = await XeroService.disconnectConnection(companyId);
+            const success = await XeroService.disconnectConnection(companyId, req.user.email);
             return res.json({ success: !!success });
         } catch (err) {
             return next(err);
@@ -724,7 +725,7 @@ class XeroController {
     activateConnection = async (req, res, next) => {
         try {
             const companyId = req.params.id;
-            const success = await XeroService.activateConnection(companyId);
+            const success = await XeroService.activateConnection(companyId, req.user.email);
             return res.json({ success: !!success });
         } catch (err) {
             return next(err);
@@ -742,7 +743,7 @@ class XeroController {
                 throw new ValidationError('companyName is required.');
             }
 
-            const success = await XeroService.renameConnection(companyId, companyName);
+            const success = await XeroService.renameConnection(companyId, req.user.email, companyName);
             return res.json({ success: !!success });
         } catch (err) {
             return next(err);
@@ -755,8 +756,8 @@ class XeroController {
     pullMasterData = async (req, res, next) => {
         try {
             const { companyId, tier } = req.query;
-            
-            const aggregated = await XeroService.pullMasterData(companyId, tier);
+
+            const aggregated = await XeroService.pullMasterData(companyId, tier, req.user.email);
 
             if (!aggregated) {
                 const { AppError } = require('../../core/errors/AppError');

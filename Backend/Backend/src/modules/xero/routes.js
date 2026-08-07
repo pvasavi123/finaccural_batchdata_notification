@@ -7,7 +7,10 @@ const { validateXeroState } = require('../../core/middleware/oauthMiddleware');
 const { authenticate } = require('../auth/auth.middleware');
 
 // OAuth
-router.get('/connect',             controller.connectXero);
+// /connect requires auth so the connection is tagged with the verified
+// req.user.email, never a client-suppliable ?mail= — the frontend already
+// appends ?token=<jwt> to this URL for exactly this reason.
+router.get('/connect',             authenticate, controller.connectXero);
 router.get('/callback',            validateXeroState, controller.xeroCallback);
 router.post('/select-companies',   controller.selectCompanies);
 router.post('/disconnect',         authenticate, controller.disconnectXero);

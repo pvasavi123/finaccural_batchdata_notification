@@ -105,8 +105,38 @@ Office.onReady(() => {
     const NotificationService = {
         STORAGE_KEY: "fa_notifications",
         MAX_ITEMS: 50,
+        _lastNotif: null,
 
-        /** @returns {Array<{id:string,type:'success'|'error',message:string,detail:string,timestamp:string,read:boolean}>} */
+        /**
+         * Normalizes a provider tag to "quickbooks" | "xero" | null.
+         * null means "global" — not tied to either ERP, so it's always
+         * visible regardless of which provider the user is currently on
+         * (e.g. login, payment, logout).
+         * @param {string} [provider]
+         * @returns {"quickbooks"|"xero"|null}
+         */
+        _normalizeProvider(provider) {
+            if (provider === "quickbooks" || provider === "xero") return provider;
+            return null;
+        },
+
+        /**
+         * Filters a notification list down to what's visible in the
+         * current provider context: global (provider-less) entries plus
+         * whichever ERP the user is actively using. This is the single
+         * choke point that keeps QuickBooks and Xero notifications
+         * (toast, badge count, and drawer history) fully separated —
+         * QuickBooks notifications never surface while on Xero and vice
+         * versa.
+         * @param {Array} list
+         * @returns {Array}
+         */
+        _forCurrentContext(list) {
+            const ctx = (typeof AppState !== "undefined" && AppState.currentProvider) || null;
+            return list.filter(n => !n.provider || n.provider === ctx);
+        },
+
+        /** @returns {Array<{id:string,type:'success'|'error',message:string,detail:string,provider:('quickbooks'|'xero'|null),timestamp:string,read:boolean}>} */
         _load() {
             try {
                 const raw = localStorage.getItem(this.STORAGE_KEY);
@@ -148,24 +178,63 @@ Office.onReady(() => {
          * failed — the bell is just the persisted history, never required
          * reading), and refreshes the bell badge. If the drawer happens to
          * already be open, the new entry is shown there too and marked read.
+         *
+         * QuickBooks/Xero separation: `provider` tags which ERP the action
+         * belongs to. A tagged notification only ever toasts, counts toward
+         * the badge, or appears in the drawer while the user is actively on
+         * that same provider (AppState.currentProvider) — it's still saved
+         * to history so it surfaces correctly if the user switches back
+         * later, but it's fully invisible in the meantime. Untagged (global)
+         * notifications — login, payment, logout, etc. — aren't tied to
+         * either ERP and always show.
          * @param {string} message - short outcome, e.g. "Data pull completed successfully"
          * @param {"success"|"error"} type
          * @param {string} [detail] - optional second line, e.g. "Data synchronized successfully."
+         * @param {"quickbooks"|"xero"} [provider] - which ERP this belongs to, if any
          */
-        add(message, type, detail) {
+        add(message, type, detail, provider) {
             if (!message) return;
             const normalizedType = type === "error" ? "error" : "success";
+            const normalizedProvider = this._normalizeProvider(provider);
+
+            // Duplicate guard — the same completed outcome can occasionally
+            // be reported twice (e.g. two callback paths both observing the
+            // same finished operation). Suppress an identical repeat within
+            // a short window so each completed action produces exactly one
+            // toast/notification, never more.
+            const now = Date.now();
+            if (
+                this._lastNotif &&
+                this._lastNotif.message === message &&
+                this._lastNotif.type === normalizedType &&
+                this._lastNotif.provider === normalizedProvider &&
+                (now - this._lastNotif.at) < 1500
+            ) {
+                return;
+            }
+            this._lastNotif = { message, type: normalizedType, provider: normalizedProvider, at: now };
+
             const list = this._load();
             list.unshift({
                 id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
                 type: normalizedType,
                 message: String(message),
                 detail: detail ? String(detail) : "",
+                provider: normalizedProvider,
                 timestamp: new Date().toISOString(),
                 read: false
             });
             if (list.length > this.MAX_ITEMS) list.length = this.MAX_ITEMS;
             this._save(list);
+
+            // Only surface it (toast + badge/drawer refresh) if it's global
+            // or matches the ERP the user is currently on — a QuickBooks
+            // notification must never appear while on Xero, and vice versa.
+            const currentCtx = (typeof AppState !== "undefined" && AppState.currentProvider) || null;
+            const isVisibleNow = !normalizedProvider || normalizedProvider === currentCtx;
+            if (!isVisibleNow) {
+                return;
+            }
 
             // Immediate feedback — always, regardless of whether the drawer
             // is open or the bell has ever been clicked.
@@ -219,19 +288,42 @@ Office.onReady(() => {
             dismissTimer = setTimeout(removeToast, duration);
         },
 
+        /**
+         * Re-renders the badge (and the drawer, if it's open) against the
+         * current provider context. Call this whenever AppState.currentProvider
+         * changes (switching between QuickBooks and Xero) so a badge count
+         * or open drawer left over from the other provider doesn't linger —
+         * it recomputes to show only what's actually visible now.
+         */
+        refreshForContext() {
+            this.renderBadge();
+            const drawer = document.getElementById("notifDrawer");
+            if (drawer && drawer.style.display !== "none") {
+                this.renderDrawer();
+            }
+        },
+
+        /** Notifications visible right now — global entries plus the active provider's. */
         getAll() {
-            return this._load();
+            return this._forCurrentContext(this._load());
         },
 
         getUnreadCount() {
-            return this._load().filter(n => !n.read).length;
+            return this._forCurrentContext(this._load()).filter(n => !n.read).length;
         },
 
+        /**
+         * Marks read only the notifications currently visible (global +
+         * active provider) — a QuickBooks notification the user hasn't
+         * seen yet (because they're on Xero) stays unread until they
+         * actually switch to QuickBooks and see it.
+         */
         markAllRead() {
             const list = this._load();
+            const ctx = (typeof AppState !== "undefined" && AppState.currentProvider) || null;
             let changed = false;
             list.forEach(n => {
-                if (!n.read) {
+                if (!n.read && (!n.provider || n.provider === ctx)) {
                     n.read = true;
                     changed = true;
                 }
@@ -1384,6 +1476,13 @@ Office.onReady(() => {
             const step3Label = document.getElementById("provStep3Label");
             if (step1Label) step1Label.textContent = `Connect to ${pName}`;
             if (step3Label) step3Label.textContent = `Pull Master Data`;
+
+            // Active provider just changed — keep the badge/drawer, log
+            // console, and step indicators in sync (all re-scoped to this
+            // provider + whatever company is active for it).
+            NotificationService.refreshForContext();
+            this.renderActiveLogConsole();
+            this.applyStepState();
         },
 
         showConnecting(provider) {
@@ -1403,6 +1502,12 @@ Office.onReady(() => {
                 const textEl = document.getElementById("connectingText");
                 if (textEl) textEl.textContent = `Connecting with ${pName}...`;
             }
+
+            // Active provider just changed — keep the badge/drawer, log
+            // console, and step indicators in sync.
+            NotificationService.refreshForContext();
+            this.renderActiveLogConsole();
+            this.applyStepState();
         },
 
         /**
@@ -1448,6 +1553,12 @@ Office.onReady(() => {
                         if (qbBtn)   qbBtn.innerHTML   = hasQB   ? "▶ Open QuickBooks Dashboard →" : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect QuickBooks →`;
                         if (xeroBtn) xeroBtn.innerHTML = hasXero ? "▶ Open Xero Dashboard →"       : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect Xero →`;
 
+                        // No active provider anymore — recompute the badge/drawer,
+                        // log console, and step indicators so nothing left over
+                        // from a previous provider/company lingers.
+                        NotificationService.refreshForContext();
+                        this.renderActiveLogConsole();
+                        this.applyStepState();
                         return;
                     }
 
@@ -1588,11 +1699,11 @@ Office.onReady(() => {
                                     const activeId = Array.from(xeroSelected)[0];
                                     if (activeId) AppState.currentCompanyId = activeId;
 
-                                    DashboardService.showStatus("Xero companies saved successfully.", "success");
+                                    DashboardService.showStatus("Xero companies saved successfully.", "success", null, "xero");
                                     DashboardService.renderERPSection();
                                 } catch (err) {
                                     console.error("Error saving Xero companies:", err);
-                                    DashboardService.showStatus("Failed to save Xero companies.", "error");
+                                    DashboardService.showStatus("Failed to save Xero companies.", "error", null, "xero");
                                     newConfirmBtn.disabled = false;
                                     newConfirmBtn.textContent = "Connect Selected Companies";
                                 }
@@ -1685,8 +1796,9 @@ Office.onReady(() => {
                                 }
                                 if (e.target.classList.contains("fa-btn-reconnect")) {
                                     e.stopPropagation();
-                                    this.showStatus("Launching re-authorization...", "success");
-                                    this.launchERPOAuth((c.platform || "quickbooks").toLowerCase());
+                                    const reconnectPlatform = (c.platform || "quickbooks").toLowerCase();
+                                    this.showStatus("Launching re-authorization...", "success", null, reconnectPlatform);
+                                    this.launchERPOAuth(reconnectPlatform);
                                     return;
                                 }
                                 if (isDisconnected) {
@@ -1747,6 +1859,15 @@ Office.onReady(() => {
                     const xeroConsole = document.getElementById("xeroConsole");
                     if (qbConsole)   qbConsole.style.display   = isQB ? "flex" : "none";
                     if (xeroConsole) xeroConsole.style.display  = isQB ? "none" : "flex";
+
+                    // The active provider/company may have just changed
+                    // (switch/resume/connect) — recompute the badge/drawer,
+                    // log console, and step indicators so all three stay
+                    // scoped to exactly what's active now, never a leftover
+                    // from before.
+                    NotificationService.refreshForContext();
+                    this.renderActiveLogConsole();
+                    this.applyStepState();
                 })
                 .catch(() => {
                     // Fallback to offline/disconnected view
@@ -1797,26 +1918,29 @@ Office.onReady(() => {
 
             // Set the provider immediately from the target company so renderERPSection shows correct platform
             const targetConn = conns.find(c => c.companyId === companyId);
+            const targetPlatform = targetConn ? (targetConn.platform || "quickbooks").toLowerCase() : null;
             if (targetConn) {
-                AppState.currentProvider = (targetConn.platform || "quickbooks").toLowerCase();
+                AppState.currentProvider = targetPlatform;
                 AppState.erpType = AppState.currentProvider;
             }
 
             ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data: ", err));
-            
+
+            // Toast only fires once the backend confirms the switch — not
+            // when the click merely starts the request.
             ApiService.apiFetch(`/api/connections/${companyId}/activate`, { method: "POST" })
                 .then(() => {
                     this.renderERPSection();
+                    if (targetConn) {
+                        this.addLog(`Switched active company to: ${targetConn.companyName}`);
+                        this.showStatus(`Active company updated to ${targetConn.companyName}`, "success", null, targetPlatform);
+                    }
                 })
                 .catch(err => {
                     console.error("Error activating company:", err);
                     this.renderERPSection();
+                    this.showStatus("Failed to switch active company.", "error", null, targetPlatform);
                 });
-
-            if (targetConn) {
-                this.addLog(`Switched active company to: ${targetConn.companyName}`);
-                this.showStatus(`Active company updated to ${targetConn.companyName}`, "success");
-            }
         },
 
         showContextMenu(targetBtn, company) {
@@ -1839,7 +1963,8 @@ Office.onReady(() => {
             if (disconnectBtn) {
                 disconnectBtn.onclick = async () => {
                     menu.style.display = "none";
-                    this.showStatus(`Disconnecting ${company.companyName}...`, "success");
+                    const companyPlatform = (company.platform || "quickbooks").toLowerCase();
+                    this.showStatus(`Disconnecting ${company.companyName}...`, "success", null, companyPlatform);
                     try {
                         await ApiService.apiFetch(`/api/connections/${company.companyId}`, { method: "DELETE" });
                         // If we disconnected the currently active company, reset it so a new one is picked
@@ -1847,10 +1972,10 @@ Office.onReady(() => {
                             AppState.currentCompanyId = null;
                         }
                         try { await ExcelService.clearMasterData(); } catch (_) {}
-                        this.showStatus("Company disconnected.", "success");
+                        this.showStatus("Company disconnected.", "success", null, companyPlatform);
                         this.renderERPSection();
                     } catch (_) {
-                        this.showStatus("Failed to disconnect company.", "error");
+                        this.showStatus("Failed to disconnect company.", "error", null, companyPlatform);
                     }
                 };
             }
@@ -1879,6 +2004,7 @@ Office.onReady(() => {
                 confirmBtn.onclick = async () => {
                     const newName = input.value.trim();
                     if (!newName) return;
+                    const companyPlatform = (company.platform || "quickbooks").toLowerCase();
                     confirmBtn.disabled = true;
                     try {
                         const res = await ApiService.apiFetch(`/api/connections/${company.companyId}/rename`, {
@@ -1888,15 +2014,15 @@ Office.onReady(() => {
                         });
                         if (res.ok) {
                             company.companyName = newName;
-                            this.showStatus("Company renamed successfully.", "success");
+                            this.showStatus("Company renamed successfully.", "success", null, companyPlatform);
                             closeModal();
                             this.renderERPSection();
                         } else {
-                            this.showStatus("Failed to rename company.", "error");
+                            this.showStatus("Failed to rename company.", "error", null, companyPlatform);
                         }
                     } catch (err) {
                         console.error("Rename error:", err);
-                        this.showStatus("Failed to rename company.", "error");
+                        this.showStatus("Failed to rename company.", "error", null, companyPlatform);
                     } finally {
                         confirmBtn.disabled = false;
                     }
@@ -1913,62 +2039,227 @@ Office.onReady(() => {
             if (stepEl) stepEl.classList.add("complete");
         },
 
+        // Console log history persists across taskpane refreshes (the
+        // add-in's DOM/JS state is rebuilt from scratch on every reload, so
+        // without this the QuickBooks/Xero log consoles would always come
+        // back empty). Capped so localStorage can't grow unbounded.
+        //
+        // Every entry is tagged with both the provider AND the company that
+        // was active when it was logged. The console only ever renders
+        // entries matching the CURRENT provider + active company — this is
+        // what stops a log line like "Pulling master data..." from another
+        // company (or an earlier, unrelated session) from ever appearing
+        // as if it just happened. Each entry only shows up once the real
+        // action it describes has actually run for the company you're
+        // currently looking at.
+        LOG_STORAGE_KEY: "fa_console_logs",
+        MAX_LOG_ENTRIES: 300,
+
+        /** @returns {Array<{provider:('quickbooks'|'xero'), companyId:(string|null), message:string, timestamp:string}>} */
+        _loadLogs() {
+            try {
+                const raw = localStorage.getItem(this.LOG_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (_) {
+                return [];
+            }
+        },
+
+        _saveLogs(list) {
+            try {
+                localStorage.setItem(this.LOG_STORAGE_KEY, JSON.stringify(list));
+            } catch (_) {
+                // Storage full/unavailable — logs just won't persist across
+                // a refresh, but the app keeps working.
+            }
+        },
+
         /**
-         * Adds a log line to the active ERP console.
+         * Renders a single stored/new entry as a log line and appends it to
+         * the given console element, without re-stamping the time — the
+         * original timestamp is preserved exactly as logged.
+         * @param {HTMLElement} log
          * @param {string} message
+         * @param {string} timestampIso
          */
-        addLog(message) {
-            const logId = AppState.currentProvider === "quickbooks" ? "qbLog" : "xeroLog";
-            const log   = document.getElementById(logId);
-            if (!log) return;
+        _appendLogLine(log, message, timestampIso) {
             const line = document.createElement("div");
             line.className = "log-line";
-            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            const timeLabel = new Date(timestampIso).toLocaleTimeString();
+            line.textContent = `[${timeLabel}] ${message}`;
             log.appendChild(line);
+        },
+
+        /**
+         * Re-renders the visible QuickBooks/Xero console from persisted
+         * history, filtered strictly to the current provider AND the
+         * currently active company (AppState.currentCompanyId). Call this
+         * any time the active provider or company changes (connect,
+         * switch, resume, disconnect, dropdown/modal change) as well as on
+         * app init — it's the single source of truth for what the console
+         * shows, so a company that's never had Setup/Pull run always
+         * starts with a clean console, never another company's history.
+         */
+        renderActiveLogConsole() {
+            const provider = AppState.currentProvider === "quickbooks" ? "quickbooks" : "xero";
+            const logId = provider === "quickbooks" ? "qbLog" : "xeroLog";
+            const log = document.getElementById(logId);
+            if (!log) return;
+
+            const companyId = AppState.currentCompanyId || null;
+            const entries = this._loadLogs().filter(entry =>
+                entry.provider === provider && (entry.companyId || null) === companyId
+            );
+
+            log.innerHTML = "";
+            entries.forEach(entry => this._appendLogLine(log, entry.message, entry.timestamp));
             log.scrollTop = log.scrollHeight;
         },
 
         /**
-         * Displays a status notification in the dashboard status bar, pops
-         * an immediate top-right toast, and records the same notification
-         * in the Bell Notification Center. Transient "in progress" messages
-         * (e.g. "Pulling data...") are shown in the status bar but not
-         * turned into a toast/notification — only terminal outcomes are, so
-         * the user isn't shown a toast for every intermediate step.
+         * Adds a log line for an action that has actually just executed,
+         * persists it tagged to the current provider + active company, and
+         * re-renders the console from that persisted history. Because the
+         * console always re-derives its content from storage (filtered to
+         * the exact provider/company in view), a log entry can only ever
+         * appear after the real action it describes has run — nothing is
+         * fabricated or carried over from a different company.
          * @param {string} message
-         * @param {"success"|"error"} type
-         * @param {string} [detail] - optional second line shown under the toast title and in the bell drawer
          */
-        showStatus(message, type, detail) {
-            const bar = AppState.erpConnected ? document.getElementById("statusBarConnected") : document.getElementById("statusBar");
-            if (bar) {
-                bar.innerHTML    = message;
-                bar.className    = "status-bar";
-                bar.classList.add(type === "success" ? "status-success" : "status-error");
-            }
+        addLog(message) {
+            const provider = AppState.currentProvider === "quickbooks" ? "quickbooks" : "xero";
+            const companyId = AppState.currentCompanyId || null;
+            const timestamp = new Date().toISOString();
 
-            if (typeof message === "string" && !message.trim().endsWith("...")) {
-                NotificationService.add(message, type, detail);
+            const list = this._loadLogs();
+            list.push({ provider, companyId, message: String(message), timestamp });
+            if (list.length > this.MAX_LOG_ENTRIES) {
+                list.splice(0, list.length - this.MAX_LOG_ENTRIES);
             }
+            this._saveLogs(list);
+
+            this.renderActiveLogConsole();
         },
 
         /**
-         * Marks a progress step as complete.
-         * @param {string} step - base step ID
+         * Pops an immediate top-right toast and records the same
+         * notification in the Bell Notification Center. Transient
+         * "in progress" messages (e.g. "Pulling data...") are not turned
+         * into a toast/notification — only terminal outcomes are, so the
+         * user isn't shown a toast for every intermediate step. No banner
+         * is rendered inline; status updates live in the log console only.
+         *
+         * `provider` tags a QuickBooks/Xero-specific outcome so it's only
+         * ever shown while the user is actively on that same ERP — pass
+         * "quickbooks" or "xero" for provider-scoped actions (connect,
+         * setup sheets, pull data, disconnect a company, etc.). Leave it
+         * out for actions that aren't tied to either ERP (login, payment,
+         * logout, disconnect-everything).
+         * @param {string} message
+         * @param {"success"|"error"} type
+         * @param {string} [detail] - optional second line shown under the toast title and in the bell drawer
+         * @param {"quickbooks"|"xero"} [provider] - which ERP this belongs to, if any
+         */
+        showStatus(message, type, detail, provider) {
+            if (typeof message === "string" && !message.trim().endsWith("...")) {
+                NotificationService.add(message, type, detail, provider);
+            }
+        },
+
+        // Setup/Pull step completion (the green checkmarks on steps 2 and 3)
+        // persists per provider + company, same reasoning as the log
+        // console: without this, a taskpane refresh would reset every step
+        // indicator to "not done" even though the log clearly shows Setup
+        // and Pull already ran — the two must stay consistent. Step 1
+        // (Connect) isn't stored here at all; it's derived live from
+        // AppState.erpConnected, which is already persisted separately.
+        STEP_STORAGE_KEY: "fa_step_state",
+
+        /** @returns {Object<string, {setup?:boolean, pull?:boolean}>} */
+        _loadStepState() {
+            try {
+                const raw = localStorage.getItem(this.STEP_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : {};
+                return (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+            } catch (_) {
+                return {};
+            }
+        },
+
+        _saveStepState(state) {
+            try {
+                localStorage.setItem(this.STEP_STORAGE_KEY, JSON.stringify(state));
+            } catch (_) {
+                // Storage full/unavailable — step completion just won't
+                // persist across a refresh, but the app keeps working.
+            }
+        },
+
+        _stepStateKey(provider, companyId) {
+            return `${provider}::${companyId || "none"}`;
+        },
+
+        /**
+         * Applies step-completion state to every step indicator for the
+         * current provider + active company — both the "provider-selected"
+         * (provStepX) and "connected" (stepX/xeroStepX) sets of elements.
+         * Connect is derived live from AppState.erpConnected; Setup/Pull
+         * come from persisted per-company storage. Explicitly clears the
+         * "complete" class when a step is NOT done for this company, so
+         * switching to (or refreshing on) a company that's never had
+         * Setup/Pull run never shows a stale green checkmark left over
+         * from a previously active company.
+         */
+        applyStepState() {
+            const isQB = AppState.currentProvider === "quickbooks";
+            const provider = isQB ? "quickbooks" : "xero";
+            const key = this._stepStateKey(provider, AppState.currentCompanyId);
+            const state = this._loadStepState()[key] || {};
+            const connectDone = !!AppState.erpConnected;
+
+            [
+                [isQB ? "stepConnect" : "xeroStepConnect", connectDone],
+                [isQB ? "stepSetup"   : "xeroStepSetup",   !!state.setup],
+                [isQB ? "stepPull"    : "xeroStepPull",    !!state.pull],
+                ["provStepConnect", connectDone],
+                ["provStepSetup",   !!state.setup],
+                ["provStepPull",    !!state.pull]
+            ].forEach(([id, done]) => {
+                document.getElementById(id)?.classList.toggle("complete", done);
+            });
+        },
+
+        /**
+         * Marks Setup or Pull complete for the current provider + active
+         * company — persists it so it survives a refresh, then re-applies
+         * step state to the DOM immediately. "connect" is a no-op here
+         * since it's derived live from AppState.erpConnected instead.
+         * @param {"connect"|"setup"|"pull"} stepName
+         */
+        markStepComplete(stepName) {
+            if (stepName === "setup" || stepName === "pull") {
+                const provider = AppState.currentProvider === "quickbooks" ? "quickbooks" : "xero";
+                const key = this._stepStateKey(provider, AppState.currentCompanyId);
+                const state = this._loadStepState();
+                state[key] = { ...(state[key] || {}), [stepName]: true };
+                this._saveStepState(state);
+            }
+            this.applyStepState();
+        },
+
+        /**
+         * Marks a progress step as complete (connected-dashboard console).
+         * @param {string} step - base step ID ("stepConnect"|"stepSetup"|"stepPull")
          */
         completeStep(step) {
-            let id = step;
-            if (AppState.currentProvider !== "quickbooks") {
-                if (step === "stepConnect") id = "xeroStepConnect";
-                if (step === "stepSetup")   id = "xeroStepSetup";
-                if (step === "stepPull")    id = "xeroStepPull";
-            }
-            const el = document.getElementById(id);
-            if (el) el.classList.add("complete");
+            const stepName = step === "stepSetup" ? "setup" : step === "stepPull" ? "pull" : "connect";
+            this.markStepComplete(stepName);
         },
 
         resetSteps() {
-            ["stepConnect","stepSetup","stepPull","xeroStepConnect","xeroStepSetup","xeroStepPull"]
+            ["stepConnect","stepSetup","stepPull","xeroStepConnect","xeroStepSetup","xeroStepPull",
+             "provStepConnect","provStepSetup","provStepPull"]
                 .forEach(id => document.getElementById(id)?.classList.remove("complete", "active"));
         },
 
@@ -2001,11 +2292,22 @@ Office.onReady(() => {
                 ? `${ApiService.BASE}/api/quickbooks/connect/?tier=${AppState.currentTier}&mail=${encodedMail}${tokenParam}`
                 : `${ApiService.BASE}/api/xero/connect?tier=${AppState.currentTier}&mail=${encodedMail}${tokenParam}`;
 
+            // Popup opening is not a completed action — only logged, never toasted.
             this.addLog(`Opening ${pName} sign-in...`);
-            this.showStatus(`Opening ${pName} sign-in...`, "success");
 
             // Note: The simulated setTimeout was removed so the UI waits for the real OAuth callback.
 
+            // Guards against the completion/cancellation handling running
+            // twice for the same attempt (e.g. the real "connected" message
+            // arrives right as the window-closed poll also fires) — only
+            // the first one wins, so exactly one outcome is ever processed
+            // per attempt.
+            let settled = false;
+            const finishOnce = (fn) => {
+                if (settled) return;
+                settled = true;
+                fn();
+            };
 
             if (typeof Office !== "undefined" && Office.context && Office.context.ui) {
                 Office.context.ui.displayDialogAsync(
@@ -2015,12 +2317,15 @@ Office.onReady(() => {
                         if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                             const win = window.open(connectUrl, "_blank", "width=800,height=600");
                             if (!win) {
-                                this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error");
+                                this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
                             } else {
                                 const timer = setInterval(() => {
                                     if (win.closed) {
                                         clearInterval(timer);
-                                        DashboardService.onERPConnected(provider);
+                                        // Window closed with no completion message received —
+                                        // treat as a plain user cancellation: no verification,
+                                        // no callback, no toast. Just restore the prior screen.
+                                        finishOnce(() => DashboardService.cancelERPConnection(provider));
                                     }
                                 }, 1000);
                             }
@@ -2029,13 +2334,16 @@ Office.onReady(() => {
                             dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
                                 if (arg.message === "qb_connected" || arg.message === "xero_connected") {
                                     dialog.close();
-                                    DashboardService.onERPConnected(provider);
+                                    finishOnce(() => DashboardService.onERPConnected(provider));
                                 }
                             });
-                            // Fallback: If user closes dialog manually, simulate connection success
+                            // Fallback: dialog closed manually (error 12006) without a
+                            // completion message — this is a user cancellation, not a
+                            // failure. No backend verification, no callback, no toast:
+                            // just silently restore the screen the user started from.
                             dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
                                 if (arg.error === 12006) {
-                                    DashboardService.onERPConnected(provider);
+                                    finishOnce(() => DashboardService.cancelERPConnection(provider));
                                 }
                             });
                         }
@@ -2046,25 +2354,49 @@ Office.onReady(() => {
                 const msgHandler = (event) => {
                     if (event.data === "qb_connected" || event.data === "xero_connected") {
                         window.removeEventListener("message", msgHandler);
-                        DashboardService.onERPConnected(provider);
+                        finishOnce(() => DashboardService.onERPConnected(provider));
                     }
                 };
                 window.addEventListener("message", msgHandler);
 
                 const win = window.open(connectUrl, `${provider}_auth`, "width=800,height=600");
                 if (!win) {
-                    this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error");
+                    this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
                 } else {
-                    // Fallback: Check if window is closed manually
+                    // Fallback: window closed manually without a completion
+                    // message — this is a user cancellation. No backend
+                    // verification, no completion callback, no toast: just
+                    // silently restore the screen the user started from.
                     const timer = setInterval(() => {
                         if (win.closed) {
                             clearInterval(timer);
                             window.removeEventListener("message", msgHandler);
-                            DashboardService.onERPConnected(provider);
+                            finishOnce(() => DashboardService.cancelERPConnection(provider));
                         }
                     }, 1000);
                 }
             }
+        },
+
+        /**
+         * Called when the user manually closes the OAuth popup/dialog
+         * without completing authentication. This is a pure cancellation:
+         * no backend verification, no onERPConnected callback, and no
+         * success/error/warning toast of any kind — closing the popup is
+         * not an outcome that gets reported to the user. It restores the
+         * dashboard to its real state (the disconnected provider-choice
+         * screen, since no connection exists) rather than leaving the
+         * "Not connected" provider-selected screen with its Setup/Pull
+         * buttons visible — that intermediate screen only makes sense
+         * once a connection attempt is in flight, not after it's been
+         * abandoned. Only a genuine OAuth callback from the backend
+         * (handled by onERPConnected) ever proceeds to verification and
+         * notifications.
+         * @param {"quickbooks"|"xero"} provider
+         */
+        cancelERPConnection(provider) {
+            void provider; // kept for signature symmetry with the completion path
+            this.renderERPSection();
         },
 
         /**
@@ -2131,9 +2463,6 @@ Office.onReady(() => {
         _finalizeConnection(provider, connId) {
             const isQB = provider === "quickbooks";
 
-            // Mark step 1 (Connect) complete in provider-selected console
-            document.getElementById("provStepConnect")?.classList.add("complete");
-
             // Transition to fully connected dashboard (Image 3)
             this.render();
 
@@ -2142,8 +2471,12 @@ Office.onReady(() => {
             if (realmEl) realmEl.textContent = connId;
 
             // Show success status
-            this.showStatus(`${isQB ? "QuickBooks" : "Xero"} connected successfully.`, "success");
-            this.completeStep("stepConnect");
+            this.showStatus(`${isQB ? "QuickBooks" : "Xero"} connected successfully.`, "success", null, provider);
+
+            // Step 1 (Connect) is derived live from AppState.erpConnected
+            // (already true by this point) — this applies it to both the
+            // provider-selected and connected step indicators.
+            this.applyStepState();
         },
 
         /**
@@ -2165,16 +2498,20 @@ Office.onReady(() => {
             localStorage.removeItem("fa_erp_org");
             localStorage.removeItem("fa_erp_date");
 
+            // resetSteps() clears every step indicator (provider-selected
+            // and connected consoles, both providers) — and, since this is
+            // an explicit full disconnect (not a refresh), also wipe the
+            // persisted Setup/Pull completion state behind them for real.
             this.resetSteps();
-            // Also reset provider-selected progress steps
-            ["provStepConnect","provStepSetup","provStepPull"]
-                .forEach(id => document.getElementById(id)?.classList.remove("complete", "active"));
-            
-            // Clear logs
+            this._saveStepState({});
+
+            // Clear logs — same reasoning: a real disconnect wipes history
+            // for good, unlike a taskpane refresh which must preserve it.
             const qbLog = document.getElementById("qbLog");
             const xeroLog = document.getElementById("xeroLog");
             if (qbLog) qbLog.innerHTML = "";
             if (xeroLog) xeroLog.innerHTML = "";
+            this._saveLogs([]);
 
             this.showStatus("Disconnecting all companies...", "success");
 
@@ -2203,6 +2540,13 @@ Office.onReady(() => {
     const AppController = {
 
         init() {
+            // Note: the QuickBooks/Xero log consoles are populated by
+            // DashboardService.renderActiveLogConsole(), called once the
+            // active provider/company are resolved during restoreSession()
+            // below (via render() -> renderERPSection()) — not here, since
+            // AppState.currentCompanyId isn't known yet at this point and
+            // the console must be scoped to the correct company from the
+            // start, never showing another company's history.
             this.bindWelcomeView();
             this.bindPlansView();
             this.bindPaymentView();
@@ -2449,7 +2793,7 @@ Office.onReady(() => {
                         AppState.erpType = "quickbooks";
                         await ApiService.apiFetch(`/api/connections/${toActivate.companyId}/activate`, { method: "POST" });
                         DashboardService.renderERPSection();
-                        DashboardService.showStatus(`Resumed QuickBooks session for ${toActivate.companyName}`, "success");
+                        DashboardService.showStatus(`Resumed QuickBooks session for ${toActivate.companyName}`, "success", null, "quickbooks");
                         return;
                     }
                 } catch (_) {}
@@ -2473,7 +2817,7 @@ Office.onReady(() => {
                         AppState.erpType = "xero";
                         await ApiService.apiFetch(`/api/connections/${toActivate.companyId}/activate`, { method: "POST" });
                         DashboardService.renderERPSection();
-                        DashboardService.showStatus(`Resumed Xero session for ${toActivate.companyName}`, "success");
+                        DashboardService.showStatus(`Resumed Xero session for ${toActivate.companyName}`, "success", null, "xero");
                         return;
                     }
                 } catch (_) {}
@@ -2604,12 +2948,13 @@ Office.onReady(() => {
                         AppState.currentProvider = selectedRow.dataset.platform;
                         AppState.erpType = selectedRow.dataset.platform;
                     }
+                    const switchedPlatform = AppState.currentProvider;
                     ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data: ", err));
                     try {
                         await ApiService.apiFetch(`/api/connections/${selectedModalCompanyId}/activate`, { method: "POST" });
                     } catch (_) {}
                     DashboardService.renderERPSection();
-                    DashboardService.showStatus("Active company switched successfully.", "success");
+                    DashboardService.showStatus("Active company switched successfully.", "success", null, switchedPlatform);
                 }
                 closeChangeCompanyModal();
             });
@@ -2635,21 +2980,22 @@ Office.onReady(() => {
             document.getElementById("btnDisconnectActiveCompany")?.addEventListener("click", async () => {
                 const companyId = AppState.currentCompanyId;
                 if (!companyId) return;
-                
-                DashboardService.showStatus("Disconnecting company...", "success");
+                const disconnectPlatform = AppState.currentProvider;
+
+                DashboardService.showStatus("Disconnecting company...", "success", null, disconnectPlatform);
                 try {
                     const res = await ApiService.apiFetch(`/api/connections/${companyId}`, {
                         method: "DELETE"
                     });
                     if (res.ok) {
                         AppState.currentCompanyId = null; // Reset so a new active company gets picked
-                        DashboardService.showStatus("Company disconnected successfully.", "success");
+                        DashboardService.showStatus("Company disconnected successfully.", "success", null, disconnectPlatform);
                         DashboardService.renderERPSection();
                     } else {
-                        DashboardService.showStatus("Failed to disconnect company.", "error");
+                        DashboardService.showStatus("Failed to disconnect company.", "error", null, disconnectPlatform);
                     }
                 } catch (err) {
-                    DashboardService.showStatus("Error disconnecting company.", "error");
+                    DashboardService.showStatus("Error disconnecting company.", "error", null, disconnectPlatform);
                 }
             });
 
@@ -2677,15 +3023,15 @@ Office.onReady(() => {
                 try {
                     document.getElementById("provStepSetup")?.classList.add("active");
                     DashboardService.addLog(`Setting up Master & Input sheets for ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Setting up sheets...", "success");
+                    DashboardService.showStatus("Setting up sheets...", "success", null, AppState.currentProvider);
                     await ExcelService.setupWorkbookSheets(AppState.currentProvider);
-                    document.getElementById("provStepSetup")?.classList.add("complete");
+                    DashboardService.markStepComplete("setup");
                     DashboardService.addLog("Sheets setup successfully.");
-                    DashboardService.showStatus("Master and Input sheets setup successfully.", "success");
+                    DashboardService.showStatus("Master and Input sheets setup successfully.", "success", null, AppState.currentProvider);
                 } catch (error) {
                     console.error(error);
                     DashboardService.addLog("Error setting up sheets: " + error.message);
-                    DashboardService.showStatus("Error setting up sheets.", "error");
+                    DashboardService.showStatus("Error setting up sheets.", "error", null, AppState.currentProvider);
                 }
             });
 
@@ -2694,17 +3040,17 @@ Office.onReady(() => {
                 try {
                     document.getElementById("provStepPull")?.classList.add("active");
                     DashboardService.addLog(`Pulling master data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Pulling data...", "success");
+                    DashboardService.showStatus("Pulling data...", "success", null, AppState.currentProvider);
                     const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
                     await ExcelService.writeMasterData(AppState.currentProvider, data);
-                    document.getElementById("provStepPull")?.classList.add("complete");
+                    DashboardService.markStepComplete("pull");
                     const changedCount = countChangedMasterDataRecords(data);
                     const pullTitle = "Data pull completed successfully.";
                     const pullDetail = changedCount > 0
                         ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
                         : "Data synchronized successfully.";
                     DashboardService.addLog(`${pullTitle} ${pullDetail}`);
-                    DashboardService.showStatus(pullTitle, "success", pullDetail);
+                    DashboardService.showStatus(pullTitle, "success", pullDetail, AppState.currentProvider);
                     DashboardService.renderERPSection();
                 } catch (error) {
                     console.error(error);
@@ -2720,7 +3066,8 @@ Office.onReady(() => {
                     DashboardService.showStatus(
                         isExpired ? error.message : "Data pull failed.",
                         "error",
-                        isExpired ? "" : "Please try again."
+                        isExpired ? "" : "Please try again.",
+                        AppState.currentProvider
                     );
                     if (isExpired) {
                         // renderERPConsole() only toggles a progress-step
@@ -2754,15 +3101,15 @@ Office.onReady(() => {
                     document.getElementById(stepSetupId)?.classList.add("active");
 
                     DashboardService.addLog(`Setting up Master & Input sheets for ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Setting up sheets...", "success");
+                    DashboardService.showStatus("Setting up sheets...", "success", null, AppState.currentProvider);
                     await ExcelService.setupWorkbookSheets(AppState.currentProvider);
                     DashboardService.completeStep("stepSetup");
                     DashboardService.addLog("Sheets setup successfully.");
-                    DashboardService.showStatus("Master and Input sheets setup successfully.", "success");
+                    DashboardService.showStatus("Master and Input sheets setup successfully.", "success", null, AppState.currentProvider);
                 } catch (error) {
                     console.error(error);
                     DashboardService.addLog("Error setting up sheets: " + error.message);
-                    DashboardService.showStatus("Error setting up sheets.", "error");
+                    DashboardService.showStatus("Error setting up sheets.", "error", null, AppState.currentProvider);
                 }
             });
 
@@ -2773,7 +3120,7 @@ Office.onReady(() => {
                     document.getElementById(stepPullId)?.classList.add("active");
 
                     DashboardService.addLog(`Pulling master data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Pulling data...", "success");
+                    DashboardService.showStatus("Pulling data...", "success", null, AppState.currentProvider);
                     const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
                     await ExcelService.writeMasterData(AppState.currentProvider, data);
                     DashboardService.completeStep("stepPull");
@@ -2783,7 +3130,7 @@ Office.onReady(() => {
                         ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
                         : "Data synchronized successfully.";
                     DashboardService.addLog(`${pullTitle} ${pullDetail}`);
-                    DashboardService.showStatus(pullTitle, "success", pullDetail);
+                    DashboardService.showStatus(pullTitle, "success", pullDetail, AppState.currentProvider);
                     DashboardService.renderERPSection();
                 } catch (error) {
                     console.error(error);
@@ -2797,9 +3144,10 @@ Office.onReady(() => {
                         : "Error pulling data: " + error.message;
                     DashboardService.addLog(msg);
                     DashboardService.showStatus(
-                        isExpired ? error.message : "Data pull failed.",
+                        isExpired ? error.message : "Please set up the master sheet before pulling the master data",
                         "error",
-                        isExpired ? "" : "Please try again."
+                        isExpired ? "" : "",
+                        AppState.currentProvider
                     );
                     if (isExpired) {
                         // renderERPConsole() only toggles a progress-step
@@ -2898,16 +3246,16 @@ Office.onReady(() => {
 
                 if (!isSetupComplete || !isPullComplete) {
                     DashboardService.addLog("Cannot refresh: Setup and initial Pull must be completed first.");
-                    DashboardService.showStatus("Please set up master sheet and pull data first.", "error");
+                    DashboardService.showStatus("Please pull the master data before refreshing the schedule.", "error", null, AppState.currentProvider);
                     return;
                 }
 
                 const icon = button.querySelector(".refresh-icon");
                 if (icon) icon.classList.add("spin");
-                
+
                 try {
                     DashboardService.addLog(`Refreshing live data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Refreshing...", "success");
+                    DashboardService.showStatus("Refreshing...", "success", null, AppState.currentProvider);
 
                     const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
                     await ExcelService.writeMasterData(AppState.currentProvider, data);
@@ -2921,11 +3269,11 @@ Office.onReady(() => {
                         ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
                         : "Data synchronized successfully.";
                     DashboardService.addLog("Live data refreshed and timestamp stamped successfully.");
-                    DashboardService.showStatus(refreshTitle, "success", refreshDetail);
+                    DashboardService.showStatus(refreshTitle, "success", refreshDetail, AppState.currentProvider);
                 } catch (err) {
                     console.error("Refresh error:", err);
                     DashboardService.addLog("Error refreshing: " + err.message);
-                    DashboardService.showStatus("Data refresh failed.", "error", "Please try again.");
+                    DashboardService.showStatus("Data refresh failed.", "error", "Please try again.", AppState.currentProvider);
                 } finally {
                     setTimeout(() => {
                         if (icon) icon.classList.remove("spin");

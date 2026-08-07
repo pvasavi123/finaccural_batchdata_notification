@@ -7,7 +7,10 @@ const { validateQuickBooksState } = require('../../core/middleware/oauthMiddlewa
 const { authenticate } = require('../auth/auth.middleware');
 
 // OAuth
-router.get('/connect',    controller.connectQuickbooks);
+// /connect requires auth so the connection is tagged with the verified
+// req.user.email, never a client-suppliable ?mail= — the frontend already
+// appends ?token=<jwt> to this URL for exactly this reason.
+router.get('/connect',    authenticate, controller.connectQuickbooks);
 router.get('/callback',   validateQuickBooksState, controller.quickbooksCallback);
 router.post('/disconnect', authenticate, controller.disconnectQuickbooks);
 router.get('/tokens/',    authenticate, controller.listQuickbooksTokens);
