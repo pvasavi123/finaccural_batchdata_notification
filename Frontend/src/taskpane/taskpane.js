@@ -626,6 +626,10 @@ Office.onReady(() => {
             }
             const data = await res.json();
 
+            if (data && data.tokenRefreshed) {
+                DashboardService.addLog("Token is refreshed");
+            }
+
             // This request/response happens entirely in the browser (fetch
             // API running in the taskpane WebView), so the count is logged
             // to the browser console, not a terminal.
@@ -2086,6 +2090,9 @@ Office.onReady(() => {
         _appendLogLine(log, message, timestampIso) {
             const line = document.createElement("div");
             line.className = "log-line";
+            if (message.toLowerCase().includes("error")) {
+        line.style.color = "#ef4444"; // Red color for errors
+    }
             const timeLabel = new Date(timestampIso).toLocaleTimeString();
             line.textContent = `[${timeLabel}] ${message}`;
             log.appendChild(line);
