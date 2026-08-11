@@ -47,7 +47,15 @@ module.exports = (sequelize) => {
         // to 'Active' (see XeroService.pullMasterData); 'Disconnected' once
         // the user disconnects or a refresh fails.
         type: DataTypes.STRING(20),
-        defaultValue: 'Not Synced'
+        defaultValue: 'Not Synced',
+        // Database Validation: same guard as QuickBooksToken.status —
+        // rejects an unrecognized status before it's written.
+        validate: {
+          isIn: {
+            args: [['Not Synced', 'Active', 'Disconnected']],
+            msg: "status must be one of 'Not Synced', 'Active', 'Disconnected'."
+          }
+        }
       },
       last_synced_at: {
         type: DataTypes.DATE,

@@ -94,11 +94,45 @@ class LimitReachedError extends AppError {
     }
 }
 
+/**
+ * 401 — Wrong email/password (or a password-login attempt against an
+ * OAuth-only account) at the LOGIN step itself. Distinct from
+ * SessionExpiredError, which is about an already-issued JWT going bad —
+ * this is about the credentials never being valid in the first place.
+ */
+class AuthenticationError extends AppError {
+    constructor(message = 'Invalid email or password.', details = null) {
+        super(message, 401, 'ERR_INVALID_CREDENTIALS', details || message);
+    }
+}
+
+/**
+ * 403 — The caller IS authenticated (a valid JWT was presented — that's
+ * SessionExpiredError's job to guard) but their role doesn't permit this
+ * specific operation. Distinct on purpose from the 401 errors above:
+ * 401 means "prove who you are"; 403 means "we know who you are, and
+ * you're not allowed to do this."
+ * @param {string} [requiredRole] - the role that WOULD have been allowed
+ */
+class AuthorizationError extends AppError {
+    constructor(requiredRole = null, details = null) {
+        super(
+            'You do not have permission to perform this action.',
+            403,
+            'ERR_FORBIDDEN',
+            details || (requiredRole ? `Requires role: ${requiredRole}` : 'Insufficient role.')
+        );
+        this.requiredRole = requiredRole;
+    }
+}
+
 module.exports = {
     AppError,
     ConnectionRefusedError,
     SessionExpiredError,
     ErpSessionExpiredError,
     ValidationError,
-    LimitReachedError
+    LimitReachedError,
+    AuthenticationError,
+    AuthorizationError
 };

@@ -3,6 +3,7 @@
 const bcrypt          = require('bcrypt');
 const AdminRepository = require('./repository');
 const AdminMapper     = require('./mapper');
+const { AuthenticationError, ValidationError } = require('../../core/errors/AppError');
 
 /**
  * AdminService
@@ -22,14 +23,18 @@ class AdminService {
     static async login(email, password) {
         const admin = await AdminRepository.findByEmail(email);
 
+        // Authentication Validation: proper operational 401s (same fix as
+        // modules/auth/auth.service.js login()) instead of plain Error,
+        // so a DB outage here is still correctly classified as 503 by
+        // errorHandler.js rather than being mislabeled as bad credentials.
         if (!admin) {
-            throw new Error('Invalid Email');
+            throw new AuthenticationError('Invalid email or password.');
         }
 
         const isMatch = await bcrypt.compare(password, admin.password);
 
         if (!isMatch) {
-            throw new Error('Invalid Password');
+            throw new AuthenticationError('Invalid email or password.');
         }
 
         return AdminMapper.toAdminDTO(admin);
@@ -45,7 +50,7 @@ class AdminService {
     static async signup(name, email, password) {
         const existing = await AdminRepository.findByEmail(email);
         if (existing) {
-            throw new Error('Email already registered');
+            throw new ValidationError('Email already registered.');
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);

@@ -67,6 +67,19 @@ class UserRepository {
         await User.update(data, { where: { id } });
         return await User.findByPk(id);
     }
+
+    /**
+     * List every FinAccrual user account. Admin-only — see
+     * modules/admin/controller.js listUsers(), gated by
+     * core/middleware/authorize.js.
+     * @returns {Promise<User[]>}
+     */
+    static async findAll() {
+        return await User.findAll({
+            attributes: ['id', 'name', 'email', 'provider', 'role', 'is_active', 'plan', 'created_at'],
+            order: [['created_at', 'DESC']]
+        });
+    }
 }
 
 module.exports = UserRepository;

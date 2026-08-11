@@ -4,7 +4,8 @@ const logger = require('../logger');
 const {
     AppError,
     ConnectionRefusedError,
-    SessionExpiredError
+    SessionExpiredError,
+    ValidationError
 } = require('../errors/AppError');
 
 // Node/axios/mysql2 error codes that mean "couldn't reach a dependency"
@@ -27,6 +28,17 @@ const DB_CONNECTION_ERROR_NAMES = new Set([
     'SequelizeAccessDeniedError'
 ]);
 
+// Database Validation: a Sequelize model `validate: {...}` rule (see
+// user.model.js, quickbooks/model.js, xero/model.js) or a unique-index
+// violation (email already registered) failed. Without this branch these
+// fell through to the generic 500 ERR_INTERNAL below — which is wrong,
+// since a rejected write because the DATA was invalid is a client error
+// (400), not a server failure.
+const DB_VALIDATION_ERROR_NAMES = new Set([
+    'SequelizeValidationError',
+    'SequelizeUniqueConstraintError'
+]);
+
 /**
  * Normalize ANY thrown value into an AppError so the response shape is
  * always consistent, even for errors we didn't anticipate (raw Node
@@ -43,6 +55,16 @@ function normalize(err) {
 
     if (err && DB_CONNECTION_ERROR_NAMES.has(err.name)) {
         return new ConnectionRefusedError(err.message);
+    }
+
+    if (err && DB_VALIDATION_ERROR_NAMES.has(err.name)) {
+        // err.errors is Sequelize's array of { message, path, ... } —
+        // collapse it into one readable string instead of exposing the
+        // raw Sequelize error shape to the client.
+        const detail = Array.isArray(err.errors) && err.errors.length
+            ? err.errors.map((e) => e.message).join('; ')
+            : err.message;
+        return new ValidationError(detail, detail);
     }
 
     // Defence in depth: a raw jsonwebtoken error that slipped past

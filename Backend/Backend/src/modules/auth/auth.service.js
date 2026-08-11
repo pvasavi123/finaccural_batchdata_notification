@@ -6,6 +6,7 @@ const JwtService       = require('./jwt.service');
 const GoogleService    = require('./google.service');
 const MicrosoftService = require('./microsoft.service');
 const logger           = require('../../core/logger');
+const { ValidationError, AuthenticationError } = require('../../core/errors/AppError');
 
 /**
  * AuthService
@@ -70,15 +71,20 @@ class AuthService {
     static async signup(name, email, password) {
         const normalised = email.toLowerCase().trim();
 
+        // Database Validation (service-level, pre-write): check uniqueness
+        // ourselves and fail with a proper 400 ValidationError, rather than
+        // letting the insert hit the DB's unique constraint and bubble up
+        // as a raw SequelizeUniqueConstraintError that errorHandler.js
+        // would otherwise have to guess at classifying.
         const existing = await UserRepository.findByEmail(normalised);
         if (existing) {
-            throw new Error('Email already registered');
+            throw new ValidationError('Email already registered.');
         }
 
         const password_hash = await bcrypt.hash(password, 10);
 
         const user = await UserRepository.create({
-            name:          name.trim(),
+            name:          (name || '').trim() || 'FinAccrual User',
             email:         normalised,
             password_hash,
             provider:      'local',
@@ -103,17 +109,24 @@ class AuthService {
         const normalised = email.toLowerCase().trim();
         const user       = await UserRepository.findByEmail(normalised);
 
+        // Authentication Validation: each of these three checks throws a
+        // proper operational 401 (AuthenticationError) instead of a plain
+        // Error, so it's classified correctly by errorHandler.js and by
+        // auth.controller.js's `next(error)` — a real "unreachable
+        // database" failure now stays distinguishable from "wrong
+        // password" (see auth.controller.js login() for the other half
+        // of this fix).
         if (!user) {
-            throw new Error('Invalid email or password');
+            throw new AuthenticationError('Invalid email or password.');
         }
 
         if (user.provider !== 'local' || !user.password_hash) {
-            throw new Error('This account uses Google sign-in. Please use "Continue with Google".');
+            throw new AuthenticationError('This account uses Google sign-in. Please use "Continue with Google".');
         }
 
         const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) {
-            throw new Error('Invalid email or password');
+            throw new AuthenticationError('Invalid email or password.');
         }
 
         return {

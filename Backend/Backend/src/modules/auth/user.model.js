@@ -21,13 +21,25 @@ module.exports = (sequelize) => {
 
             name: {
                 type:      DataTypes.STRING(100),
-                allowNull: false
+                allowNull: false,
+                validate: {
+                    len: { args: [1, 100], msg: 'Name must be between 1 and 100 characters.' }
+                }
             },
 
             email: {
                 type:      DataTypes.STRING(150),
                 allowNull: false,
-                unique:    true
+                unique:    { name: 'users_email_unique', msg: 'Email already registered' },
+                // Database Validation: enforced again here, one layer below
+                // the Joi schema (core/validation/schemas.js) and the regex
+                // check in auth.validation.js, so a row can never be
+                // written with a malformed email even if it reaches the
+                // model through a path that skips those upper layers
+                // (e.g. a future admin script or seed).
+                validate: {
+                    isEmail: { msg: 'A valid email address is required.' }
+                }
             },
 
             // Null for OAuth-only users who never set a local password
@@ -57,7 +69,10 @@ module.exports = (sequelize) => {
             role: {
                 type:         DataTypes.STRING(50),
                 allowNull:    false,
-                defaultValue: 'user'
+                defaultValue: 'user',
+                validate: {
+                    isIn: { args: [['user', 'admin']], msg: "Role must be 'user' or 'admin'." }
+                }
             },
 
             is_active: {

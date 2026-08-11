@@ -44,7 +44,17 @@ module.exports = (sequelize) => {
             // it to 'Active' (see QuickBooksService.pullMasterData);
             // 'Disconnected' once the user disconnects or a refresh fails.
             type: DataTypes.STRING(20),
-            defaultValue: 'Not Synced'
+            defaultValue: 'Not Synced',
+            // Database Validation: guards against a future typo (e.g.
+            // 'Actve') silently writing an unrecognized status that the
+            // rest of the app (repository.js WHERE status: 'Active'
+            // filters) would then just quietly never match.
+            validate: {
+                isIn: {
+                    args: [['Not Synced', 'Active', 'Disconnected']],
+                    msg: "status must be one of 'Not Synced', 'Active', 'Disconnected'."
+                }
+            }
         },
         last_synced_at: {
             type: DataTypes.DATE,

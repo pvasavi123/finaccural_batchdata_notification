@@ -1,9 +1,10 @@
 'use strict';
 
 const AdminService = require('./service');
+const UserRepository = require('../auth/user.repository');
 const jwt = require('jsonwebtoken');
 const config = require('../../core/config');
-const { AppError, ValidationError } = require('../../core/errors/AppError');
+const { ValidationError } = require('../../core/errors/AppError');
 
 /**
  * AdminController
@@ -45,7 +46,10 @@ class AdminController {
                 token
             });
         } catch (error) {
-            next(error instanceof Error && error.isOperational ? error : new AppError(error.message, 401, 'ERR_UNAUTHORIZED'));
+            // Error Validation: let the centralized errorHandler classify
+            // anything unexpected (a hardcoded 401 here would previously
+            // have mislabeled e.g. a DB outage as "unauthorized").
+            next(error);
         }
     }
 
@@ -78,7 +82,25 @@ class AdminController {
                 token
             });
         } catch (error) {
-            next(error instanceof Error && error.isOperational ? error : new ValidationError(error.message));
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/admin/users
+     * Authorization Validation — admin-only. Lists every FinAccrual user
+     * account (id, name, email, provider, role, is_active, plan). Gated
+     * by `authenticate JWT` + `authorize('admin')` in routes.js — a
+     * regular FinAccrual user's own JWT (role: 'user') is rejected here
+     * with a 403 ERR_FORBIDDEN even though it passes JWT verification
+     * (it's signed with the same JWT_SECRET as an admin token).
+     */
+    async listUsers(req, res, next) {
+        try {
+            const users = await UserRepository.findAll();
+            return res.json({ success: true, count: users.length, users });
+        } catch (error) {
+            next(error);
         }
     }
 }

@@ -4,6 +4,9 @@ const express    = require('express');
 const router     = express.Router();
 const controller = require('./auth.controller');
 const { authenticate } = require('./auth.middleware');
+const { validate } = require('../../core/middleware/validate');
+const schemas = require('../../core/validation/schemas');
+const { authLimiter } = require('../../core/middleware/rateLimiters');
 
 /**
  * Auth Routes
@@ -26,8 +29,11 @@ const { authenticate } = require('./auth.middleware');
  */
 
 // Local auth
-router.post('/signup', controller.signup);
-router.post('/login',  controller.login);
+// authLimiter throttles brute-force login/signup attempts (Security
+// Validation); validate() enforces the Joi schema (Data Type Validation)
+// before the request ever reaches the controller.
+router.post('/signup', authLimiter, validate(schemas.signup), controller.signup);
+router.post('/login',  authLimiter, validate(schemas.login),  controller.login);
 
 // Google OAuth
 router.get('/google/connect',  controller.googleConnect);
@@ -45,6 +51,6 @@ router.post('/logout', controller.logout);
 
 // Protected endpoints
 router.get('/me', authenticate, controller.getMe);
-router.post('/update-plan', authenticate, controller.updatePlan);
+router.post('/update-plan', authenticate, validate(schemas.updatePlan), controller.updatePlan);
 
 module.exports = router;

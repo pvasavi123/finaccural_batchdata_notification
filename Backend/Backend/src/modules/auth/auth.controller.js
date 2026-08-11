@@ -35,7 +35,17 @@ class AuthController {
                 user:    result.user
             });
         } catch (error) {
-            next(error instanceof Error && error.isOperational ? error : new ValidationError(error.message));
+            // Database Validation / Error Validation: previously this
+            // forced EVERY non-operational error (including a raw DB
+            // connection failure like ECONNREFUSED) into a 400
+            // ValidationError, which is misleading — "the database is
+            // unreachable" is not "your input was invalid". Operational
+            // errors (ValidationError, etc.) are passed through as-is;
+            // anything else is now handed to the centralized errorHandler
+            // (core/middleware/errorHandler.js) so it gets classified
+            // properly (503 for a DB/network outage, 500 otherwise)
+            // instead of being mislabeled here.
+            next(error);
         }
     }
 
@@ -58,7 +68,12 @@ class AuthController {
                 user:    result.user
             });
         } catch (error) {
-            next(error instanceof Error && error.isOperational ? error : new AppError(error.message, 401, 'ERR_UNAUTHORIZED'));
+            // Same fix as signup() above: don't force a raw DB/network
+            // error into a misleading 401 "unauthorized" — only genuine
+            // bad-credentials failures should look like an auth failure,
+            // and AuthService.login already throws an operational error
+            // for that case. Let errorHandler.js classify anything else.
+            next(error);
         }
     }
 

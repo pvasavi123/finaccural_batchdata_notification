@@ -15,7 +15,9 @@
 
 const express = require('express');
 const router  = express.Router();
-const { AppError, ValidationError } = require('../core/errors/AppError');
+const { AppError } = require('../core/errors/AppError');
+const { validate } = require('../core/middleware/validate');
+const schemas = require('../core/validation/schemas');
 
 // ── Core domain modules ───────────────────────────────────────────
 const authRoutes        = require('../modules/auth/auth.routes');
@@ -98,7 +100,7 @@ router.get('/connections', authenticate, async (req, res, next) => {
 });
 
 // GET /api/connections/stats
-router.get('/connections/stats', authenticate, async (req, res, next) => {
+router.get('/connections/stats', authenticate, validate(schemas.connectionStatsQuery, 'query'), async (req, res, next) => {
     try {
         const mail = req.user.email;
         const plan = req.query.plan || 'pro';
@@ -194,14 +196,11 @@ router.post('/connections/:id/activate', authenticate, async (req, res, next) =>
 
 // PATCH /api/connections/:id/rename
 // Same ownership scoping as DELETE above.
-router.patch('/connections/:id/rename', authenticate, async (req, res, next) => {
+router.patch('/connections/:id/rename', authenticate, validate(schemas.renameConnection), async (req, res, next) => {
     try {
         const companyId = req.params.id;
         const mail = req.user.email;
         const { companyName } = req.body;
-        if (!companyName) {
-            throw new ValidationError('companyName is required.');
-        }
 
         let success = false;
 
@@ -226,12 +225,9 @@ router.patch('/connections/:id/rename', authenticate, async (req, res, next) => 
 // GET /api/pull-master-data?companyId=...&platform=...&tier=...
 // Same ownership scoping — a companyId this user doesn't own returns "not
 // found" rather than silently pulling and returning another user's data.
-router.get('/pull-master-data', authenticate, async (req, res, next) => {
+router.get('/pull-master-data', authenticate, validate(schemas.pullMasterDataQuery, 'query'), async (req, res, next) => {
     try {
         const { companyId, platform, tier } = req.query;
-        if (!platform) {
-            throw new ValidationError('Missing platform.');
-        }
 
         const mail = req.user.email;
         const normPlatform = platform.toLowerCase();
