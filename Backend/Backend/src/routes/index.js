@@ -41,6 +41,9 @@ try {
 // ── Legacy / compatibility ────────────────────────────────────────
 const adminRoutes = require('../modules/admin/routes');
 
+// ── Excel Schema/Data-Type/PASS-FAIL Report/API/DB Validation ─────
+const excelValidationRoutes = require('../modules/excelValidation/routes');
+
 // ── Mount Canonical Routers ───────────────────────────────────────
 
 router.use('/auth', authRoutes);
@@ -52,6 +55,8 @@ if (quickbooksRoutes) {
 if (xeroRoutes) {
     router.use('/xero', xeroRoutes);
 }
+
+router.use('/excel-validation', excelValidationRoutes);
 
 router.use('/admin', adminRoutes);
 

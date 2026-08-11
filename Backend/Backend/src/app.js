@@ -45,7 +45,14 @@ app.use(cors());
 // isn't application/json BEFORE express.json() silently no-ops on it.
 app.use(validateContentType);
 
-app.use(express.json());
+// Default express.json() limit is 100kb — too small for
+// modules/excelValidation, which accepts an uploaded .xlsx workbook as
+// base64 text inside the JSON body (see excelValidation/controller.js
+// for why it's base64-in-JSON rather than multipart/form-data). Raised
+// to 15mb everywhere else in this API a JSON body stays tiny (a few KB
+// at most), so this only changes what excel-validation's routes can
+// accept, not any other route's behavior.
+app.use(express.json({ limit: '15mb' }));
 
 // Security Validation — trims/strips control characters and inline
 // script/event-handler HTML out of every string in req.body (and

@@ -1,6 +1,7 @@
 'use strict';
 
 const Joi = require('joi');
+const { SHEET_SCHEMAS, API_COMPARABLE_SHEETS } = require('../../modules/excelValidation/schemas/masterDataSchemas');
 
 /**
  * Joi Schemas
@@ -102,6 +103,40 @@ const selectXeroCompanies = Joi.object({
     selectedTenantIds: Joi.array().items(Joi.string().trim().min(1).max(255)).min(1).required()
 });
 
+// The uploaded workbook travels as base64 inside the JSON body (see
+// modules/excelValidation/controller.js for why — the multipart
+// alternative would require carving an exception into the global
+// validateContentType header gate). 15MB of base64 text comfortably
+// covers a multi-thousand-row master-data workbook; app.js raises the
+// express.json() body-size limit to match.
+const fileBase64 = Joi.string().min(4).max(20 * 1024 * 1024).required();
+
+// Every individual sheet schema this module knows about, plus the
+// special "MasterData" key that validates the full multi-sheet
+// workbook (Company/Customers/Vendors/Accounts/Classes/Locations) at
+// once — see modules/excelValidation/service.js#resolveSchemas.
+const excelSchemaNames = [...Object.keys(SHEET_SCHEMAS), 'MasterData'];
+
+// POST /api/excel-validation/schema-check
+// POST /api/excel-validation/data-type-check
+// POST /api/excel-validation/report
+const excelSchemaCheck = Joi.object({
+    fileBase64,
+    schema: Joi.string().valid(...excelSchemaNames).required()
+});
+
+// POST /api/excel-validation/vs-api — { fileBase64, sheet, platform }
+const excelVsApi = Joi.object({
+    fileBase64,
+    sheet:    Joi.string().valid(...API_COMPARABLE_SHEETS).required(),
+    platform: Joi.string().trim().lowercase().valid('quickbooks', 'xero').required()
+});
+
+// POST /api/excel-validation/vs-database — { fileBase64 }
+const excelVsDatabase = Joi.object({
+    fileBase64
+});
+
 module.exports = {
     signup,
     login,
@@ -115,5 +150,8 @@ module.exports = {
     adminSignup,
     billingUpgrade,
     completePayment,
-    selectXeroCompanies
+    selectXeroCompanies,
+    excelSchemaCheck,
+    excelVsApi,
+    excelVsDatabase
 };
