@@ -41,7 +41,37 @@ try {
 // ── Legacy / compatibility ────────────────────────────────────────
 const adminRoutes = require('../modules/admin/routes');
  
-// ── Mount Canonical Routers ───────────────────────────────────────
+const { sequelize } = require('../core/database');
+const redisClient = require('../core/redis');
+const config = require('../core/config');
+
+router.get('/health', async (req, res) => {
+    let dbStatus = 'disconnected';
+    let redisStatus = 'disconnected';
+    let success = true;
+    try {
+        await sequelize.authenticate();
+        dbStatus = 'connected';
+    } catch (err) {
+        success = false;
+    }
+    try {
+        if (redisClient.isOpen) {
+            await redisClient.ping();
+            redisStatus = 'connected';
+        }
+    } catch (err) {
+        success = false;
+    }
+    return res.status(success ? 200 : 500).json({
+        success,
+        server: success ? 'healthy' : 'unhealthy',
+        instance: config.INSTANCE_ID,
+        redis: redisStatus,
+        database: dbStatus
+    });
+});
+
  
 router.use('/auth', authRoutes);
 router.use('/', billingRoutes);

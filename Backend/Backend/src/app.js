@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 
+
 const routes = require('./routes');
 const config = require('./core/config');
 const { errorHandler, notFoundHandler } = require('./core/middleware/errorHandler');
@@ -10,13 +11,17 @@ const { sanitizeInput } = require('./core/middleware/sanitize');
 const { responseTime } = require('./core/middleware/responseTime');
 const { generalLimiter } = require('./core/middleware/rateLimiters');
 
+
 const path = require("path");
 
+
 const app = express();
+
 
 // Performance Validation — times the FULL request lifecycle, so mount
 // this before everything else.
 app.use(responseTime);
+
 
 // Security Validation — sets standard security-related response headers
 // (X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security,
@@ -39,11 +44,14 @@ app.use(helmet({
     crossOriginOpenerPolicy: false
 }));
 
+
 app.use(cors());
+
 
 // Header Validation — reject a JSON POST/PUT/PATCH whose Content-Type
 // isn't application/json BEFORE express.json() silently no-ops on it.
 app.use(validateContentType);
+
 
 // Default express.json() limit is 100kb — too small for
 // modules/excelValidation, which accepts an uploaded .xlsx workbook as
@@ -54,14 +62,21 @@ app.use(validateContentType);
 // accept, not any other route's behavior.
 app.use(express.json({ limit: '15mb' }));
 
+
 // Security Validation — trims/strips control characters and inline
 // script/event-handler HTML out of every string in req.body (and
 // req.params); see core/middleware/sanitize.js for why req.query is
 // intentionally excluded (Express 5 makes it non-reassignable).
 app.use(sanitizeInput);
 
+
 const session = require('express-session');
+const { RedisStore } = require("connect-redis");
+const redisClient = require('./core/redis');
+
+
 app.use(session({
+    store: new RedisStore({ client: redisClient }),
     secret: config.SESSION_SECRET || 'finaccrual-fallback-secret-key',
     resave: false,
     saveUninitialized: false,
@@ -72,8 +87,8 @@ app.use(session({
 }));
 
 
-
 app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 
 // Security Validation — general request-rate ceiling across the whole
 // API (stricter limiters for /api/auth/* and the QuickBooks/Xero OAuth

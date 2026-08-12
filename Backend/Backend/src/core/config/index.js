@@ -10,8 +10,14 @@ dotenv.config();
 
 module.exports = {
     PORT: process.env.PORT || 8000,
+    INSTANCE_ID: process.env.INSTANCE_ID || 'server-1',
     SESSION_SECRET: 'finaccural-node-secret',
     JWT_SECRET: process.env.JWT_SECRET || 'jwt-finaccural-secret-key-123',
+    REDIS: {
+        HOST: process.env.REDIS_HOST || 'localhost',
+        PORT: parseInt(process.env.REDIS_PORT) || 6379,
+        PASSWORD: process.env.REDIS_PASSWORD || undefined
+    },
     DB: {
         HOST: process.env.DB_HOST || 'localhost',
         PORT: process.env.DB_PORT || 3306,
