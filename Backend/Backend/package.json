@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "dev:1": "cross-env PORT=8000 INSTANCE_ID=server-1 nodemon src/server.js",
+"dev:2": "cross-env PORT=8001 INSTANCE_ID=server-2 nodemon src/server.js",
+    "dev:all": "concurrently \"npm run dev:1\" \"npm run dev:2\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src/**/*.js",
@@ -43,6 +46,8 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
+    "concurrently": "^9.2.4",
+    "cross-env": "^10.1.0",
     "eslint": "^9.15.0",
     "jest": "^29.7.0",
     "nodemon": "^3.1.7",

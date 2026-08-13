@@ -1,851 +1,1065 @@
 <!doctype html>
 <html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FinAccrual</title>
-    <meta name="description" content="FinAccrual – Accrual, Prepaid, and Deferred Revenue automation for Excel.">
-    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="taskpane.css" />
-  </head>
 
-  <body>
-    <div class="app" id="app">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FinAccrual</title>
+  <meta name="description" content="FinAccrual – Accrual, Prepaid, and Deferred Revenue automation for Excel.">
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
 
-      <!-- ============================================================
+<body>
+  <div class="app" id="app">
+
+    <!-- ============================================================
            GLOBAL ERROR HANDLING UI
            Populated/controlled by shared/apiErrorHandler.js. Sits above
            every view so it's visible no matter what screen is active.
            ============================================================ -->
-      <div id="faGlobalBanner" class="fa-global-banner" role="alert" style="display:none;">
-        <span class="fa-global-banner-icon" id="faGlobalBannerIcon">⚠️</span>
-        <span class="fa-global-banner-message" id="faGlobalBannerMessage"></span>
-        <button class="fa-global-banner-action" id="faGlobalBannerAction" style="display:none;"></button>
-        <button class="fa-global-banner-dismiss" id="faGlobalBannerDismiss" aria-label="Dismiss">✕</button>
-      </div>
+    <div id="faGlobalBanner" class="fa-global-banner" role="alert" style="display:none;">
+      <span class="fa-global-banner-icon" id="faGlobalBannerIcon">⚠️</span>
+      <span class="fa-global-banner-message" id="faGlobalBannerMessage"></span>
+      <button class="fa-global-banner-action" id="faGlobalBannerAction" style="display:none;"></button>
+      <button class="fa-global-banner-dismiss" id="faGlobalBannerDismiss" aria-label="Dismiss">✕</button>
+    </div>
 
-      <div id="faToast" class="fa-toast" style="display:none;"></div>
+    <div id="faToast" class="fa-toast" style="display:none;"></div>
 
-      <!-- ============================================================
+    <!-- ============================================================
            ACTION RESULT TOASTS (top-right)
            Populated dynamically by NotificationService.showToast(). Sits
            above every view, same as the banner/toast above, so success/
            failure feedback is visible immediately without opening the
            bell drawer or depending on which screen is active.
            ============================================================ -->
-      <div id="notifToastContainer" class="fa-notif-toast-container"></div>
 
-      <!-- ============================================================
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="fa-toast-container"></div>
+
+    <div id="notifToastContainer" class="fa-notif-toast-container"></div>
+
+    <!-- ============================================================
            VIEW: LOADING
            ============================================================ -->
-      <div id="viewLoading" class="view active">
-        <div class="loading-screen">
-          <div class="loading-logo">
-            <div class="brand-icon">FA</div>
-          </div>
-          <div class="loading-spinner"></div>
-          <p class="loading-text">Loading FinAccrual...</p>
+    <div id="viewLoading" class="view active">
+      <div class="loading-screen">
+        <div class="loading-logo">
+          <div class="brand-icon">FA</div>
         </div>
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading FinAccrual...</p>
       </div>
+    </div>
 
-      <!-- ============================================================
+    <!-- ============================================================
            VIEW: WELCOME
            ============================================================ -->
-      <div id="viewWelcome" class="view">
-        <div class="welcome-screen">
-          <!-- Brand -->
-          <div class="welcome-brand">
-            <div class="brand-icon">FA</div>
-            <div class="brand-text">
-              <h1 class="brand-name">FinAccrual</h1>
-            </div>
+    <div id="viewWelcome" class="view">
+      <div class="welcome-screen-new">
+        <div class="welcome-top">
+          <div class="welcome-logo-large">
+            <div class="welcome-logo-box">FA</div>
+          </div>
+          <h1 class="welcome-title">Welcome to FinAccrual</h1>
+          <p class="welcome-subtitle-gradient">Smart. Accurate. Automated.</p>
+        </div>
+
+        <div class="welcome-divider-row">
+          <div class="welcome-line"></div>
+          <div class="welcome-shield-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6C4DF6" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+          </div>
+          <div class="welcome-line"></div>
+        </div>
+
+        <div class="welcome-bottom">
+          <p class="welcome-desc">Sign in to access your data, connect your<br>accounting platforms, and automate your
+            workflow.</p>
+
+          <!-- Primary Sign In Button (Triggers Dialog) -->
+          <div id="primaryAuthContainer" style="width: 100%;">
+            <button id="btnSignIn" class="btn-sign-in-primary">
+              <div class="btn-sign-in-icon">FA</div>
+              FinAccrual Sign In
+            </button>
           </div>
 
-          <!-- Tagline -->
-          <div class="welcome-tagline">
-            <p class="welcome-headline">Sign in to continue</p>
-            <p class="welcome-sub">Access your accounting automation tools</p>
-          </div>
-
-          <!-- Auth Buttons -->
-          <div class="auth-buttons">
-            <button id="btnSignInGoogle" class="auth-btn auth-btn-google">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google" class="auth-btn-icon" />
+          <!-- Secondary Auth Buttons (Hidden by default, shown after clicking Use Another in dialog) -->
+          <div id="secondaryAuthContainer" style="display: none; width: 100%; flex-direction: column; gap: 10px;">
+            <button id="btnSignInGoogle" class="btn-sign-in-primary" style="background: white; color: #333; border: 1px solid #ccc; box-shadow: none;">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" alt="Google" style="width: 16px; margin-right: 8px;" />
               Continue with Google
             </button>
-            <button id="btnSignInMicrosoft" class="auth-btn auth-btn-microsoft">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft" class="auth-btn-icon" />
+            <button id="btnSignInMicrosoft" class="btn-sign-in-primary" style="background: white; color: #333; border: 1px solid #ccc; box-shadow: none;">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" alt="Microsoft" style="width: 16px; margin-right: 8px;" />
               Continue with Microsoft
             </button>
           </div>
 
-          <!-- Version -->
-          <p class="welcome-version">v1.0 · Secure login powered by OAuth 2.0</p>
+          <p class="welcome-secure-note">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Secure and encrypted
+          </p>
         </div>
       </div>
+    </div>
 
-      <!-- ============================================================
+    <!-- ============================================================
+           VIEW: TRIAL OR SUBSCRIBE SELECTOR
+           ============================================================ -->
+    <div id="viewTrialSelect" class="view">
+      <div class="trial-select-screen">
+        
+        <div class="trial-select-header">
+          <h1 class="trial-select-title">Choose Your Plan</h1>
+          <p class="trial-select-subtitle">Start with a free trial or subscribe to unlock all features.</p>
+        </div>
+
+        <div class="trial-select-cards">
+          
+          <!-- Free Trial Card -->
+          <div class="trial-select-card">
+            <div class="trial-select-icon-box">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="8" width="18" height="14" rx="2" ry="2"></rect>
+                <line x1="12" y1="8" x2="12" y2="22"></line>
+                <path d="M19 8c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2"></path>
+                <path d="M5 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2"></path>
+                <path d="M15 8H9"></path>
+              </svg>
+            </div>
+            <h2 class="trial-select-card-title">Free Trial</h2>
+            <p class="trial-select-card-desc">Explore all premium features with a 14-day free trial.</p>
+            <ul class="trial-select-features">
+              <li><span class="check">✔</span> Full feature access</li>
+              <li><span class="check">✔</span> No credit card required</li>
+              <li><span class="check">✔</span> 14 days free</li>
+            </ul>
+            <button id="btnStartTrial" class="btn-trial-action">Start Free Trial</button>
+          </div>
+
+          <!-- Subscribe Card -->
+          <div class="trial-select-card">
+            <div class="trial-select-icon-box">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              </svg>
+            </div>
+            <h2 class="trial-select-card-title">Subscribe</h2>
+            <p class="trial-select-card-desc">Choose a plan that fits your business needs.</p>
+            <ul class="trial-select-features">
+              <li><span class="check">✔</span> All premium features</li>
+              <li><span class="check">✔</span> Priority support</li>
+              <li><span class="check">✔</span> Scalable for teams</li>
+            </ul>
+            <button id="btnViewPlans" class="btn-trial-action">View Plans & Subscribe</button>
+          </div>
+
+        </div>
+
+        <div class="trial-select-secure">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          Secure and encrypted
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============================================================
            VIEW: PLANS & PRICING
            ============================================================ -->
-      <div id="viewPlans" class="view">
-        <div class="view-header">
-          <div class="view-header-brand">
-            <button class="back-btn" id="btnPlansBack">←</button>
-            <div class="brand-icon brand-icon-sm">FA</div>
-            <span class="view-header-title">Choose Your Plan</span>
-          </div>
-          <div class="view-header-user" id="plansUserInfo">
-            <div class="user-avatar-sm" id="plansUserAvatar">A</div>
-            <span class="user-email-sm" id="plansUserEmail">user@gmail.com</span>
-          </div>
+    <div id="viewPlans" class="view">
+      <div class="view-header">
+        <div class="view-header-brand">
+          <button class="back-btn" id="btnPlansBack">←</button>
+          <div class="brand-icon brand-icon-sm">FA</div>
+          <span class="view-header-title">Choose Your Plan</span>
         </div>
-
-        <!-- Content -->
-        <div class="view-content scrollable">
-          <div class="plans-intro">
-            <p class="plans-intro-text">Start your FinAccrual subscription to unlock Excel automation.</p>
-          </div>
-
-          <!-- Billing Toggle -->
-          <div class="billing-toggle-row">
-            <span class="billing-label" id="labelMonthly">Monthly</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="billingCycleToggle" />
-              <span class="toggle-slider"></span>
-            </label>
-            <span class="billing-label" id="labelYearly">Yearly</span>
-            <span class="save-chip">Save 20%</span>
-          </div>
-
-          <!-- Plan Cards -->
-          <div class="plan-cards">
-
-            <!-- Basic -->
-            <div class="plan-card" id="cardBasic">
-              <div class="plan-card-header">
-                <span class="plan-icon">🌱</span>
-                <span class="plan-name starter-color">Basic</span>
-              </div>
-              <div class="plan-price-row">
-                <span class="plan-currency">₹</span>
-                <span class="plan-amount" id="basicAmount">699</span>
-                <span class="plan-period">/mo</span>
-              </div>
-              <ul class="plan-features">
-                <li>✓ 1 Connected Company</li>
-                <li>✓ Excel Automation Integration</li>
-                <li>✓ Secure Data Extraction</li>
-              </ul>
-              <button class="plan-btn plan-btn-starter" id="btnSelectBasic" data-plan="Basic" data-monthly="699" data-yearly="599">
-                Get Started
-              </button>
-            </div>
-
-            <!-- Standard -->
-            <div class="plan-card" id="cardStandard">
-              <div class="plan-card-header">
-                <span class="plan-icon">🚀</span>
-                <span class="plan-name ent-color">Standard</span>
-              </div>
-              <div class="plan-price-row">
-                <span class="plan-currency">₹</span>
-                <span class="plan-amount" id="standardAmount">1299</span>
-                <span class="plan-period">/mo</span>
-              </div>
-              <ul class="plan-features">
-                <li>✓ Up to 3 Connected Companies</li>
-                <li>✓ Excel Automation Integration</li>
-                <li>✓ Secure Data Extraction</li>
-              </ul>
-              <button class="plan-btn plan-btn-ent" id="btnSelectStandard" data-plan="Standard" data-monthly="1299" data-yearly="1199">
-                Get Started
-              </button>
-            </div>
-
-            <!-- Pro -->
-            <div class="plan-card plan-card-featured" id="cardPro">
-              <div class="plan-popular-badge">MOST POPULAR</div>
-              <div class="plan-card-header">
-                <span class="plan-icon">💎</span>
-                <span class="plan-name pro-color">Pro</span>
-              </div>
-              <div class="plan-price-row">
-                <span class="plan-currency">₹</span>
-                <span class="plan-amount" id="proAmount">1999</span>
-                <span class="plan-period">/mo</span>
-              </div>
-              <ul class="plan-features">
-                <li>✓ Up to 10 Connected Companies</li>
-                <li>✓ Excel Automation Integration</li>
-                <li>✓ Secure Data Extraction</li>
-                <li>✓ Priority Customer Support</li>
-              </ul>
-              <button class="plan-btn plan-btn-pro" id="btnSelectPro" data-plan="Pro" data-monthly="1999" data-yearly="1899">
-                Get Started
-              </button>
-            </div>
-
-          </div>
-
-          <p class="plans-secure-note">🔒 Payments are secured by Razorpay / Stripe</p>
+        <div class="view-header-user" id="plansUserInfo">
+          <div class="user-avatar-sm" id="plansUserAvatar">A</div>
+          <span class="user-email-sm" id="plansUserEmail">user@gmail.com</span>
         </div>
       </div>
 
-      <!-- ============================================================
+      <!-- Content -->
+      <div class="view-content scrollable">
+        <div class="plans-intro">
+          <p class="plans-intro-text">Start your FinAccrual subscription to unlock Excel automation.</p>
+        </div>
+
+        <!-- Billing Toggle -->
+        <div class="billing-toggle-row">
+          <span class="billing-label" id="labelMonthly">Monthly</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="billingCycleToggle" />
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="billing-label" id="labelYearly">Yearly</span>
+          <span class="save-chip">Save 20%</span>
+        </div>
+
+        <!-- Plan Cards -->
+        <div class="plan-cards">
+
+          <!-- Basic -->
+          <div class="plan-card" id="cardBasic">
+            <div class="plan-card-header">
+              <span class="plan-icon">🌱</span>
+              <span class="plan-name starter-color">Basic</span>
+            </div>
+            <div class="plan-price-row">
+              <span class="plan-currency">₹</span>
+              <span class="plan-amount" id="basicAmount">699</span>
+              <span class="plan-period">/mo</span>
+            </div>
+            <ul class="plan-features">
+              <li>✓ 1 Connected Company</li>
+              <li>✓ Excel Automation Integration</li>
+              <li>✓ Secure Data Extraction</li>
+            </ul>
+            <button class="plan-btn plan-btn-starter" id="btnSelectBasic" data-plan="Basic" data-monthly="699"
+              data-yearly="599">
+              Get Started
+            </button>
+          </div>
+
+          <!-- Standard -->
+          <div class="plan-card" id="cardStandard">
+            <div class="plan-card-header">
+              <span class="plan-icon">🚀</span>
+              <span class="plan-name ent-color">Standard</span>
+            </div>
+            <div class="plan-price-row">
+              <span class="plan-currency">₹</span>
+              <span class="plan-amount" id="standardAmount">1299</span>
+              <span class="plan-period">/mo</span>
+            </div>
+            <ul class="plan-features">
+              <li>✓ Up to 3 Connected Companies</li>
+              <li>✓ Excel Automation Integration</li>
+              <li>✓ Secure Data Extraction</li>
+            </ul>
+            <button class="plan-btn plan-btn-ent" id="btnSelectStandard" data-plan="Standard" data-monthly="1299"
+              data-yearly="1199">
+              Get Started
+            </button>
+          </div>
+
+          <!-- Pro -->
+          <div class="plan-card plan-card-featured" id="cardPro">
+            <div class="plan-popular-badge">MOST POPULAR</div>
+            <div class="plan-card-header">
+              <span class="plan-icon">💎</span>
+              <span class="plan-name pro-color">Pro</span>
+            </div>
+            <div class="plan-price-row">
+              <span class="plan-currency">₹</span>
+              <span class="plan-amount" id="proAmount">1999</span>
+              <span class="plan-period">/mo</span>
+            </div>
+            <ul class="plan-features">
+              <li>✓ Up to 10 Connected Companies</li>
+              <li>✓ Excel Automation Integration</li>
+              <li>✓ Secure Data Extraction</li>
+              <li>✓ Priority Customer Support</li>
+            </ul>
+            <button class="plan-btn plan-btn-pro" id="btnSelectPro" data-plan="Pro" data-monthly="1999"
+              data-yearly="1899">
+              Get Started
+            </button>
+          </div>
+
+        </div>
+
+        <p class="plans-secure-note">🔒 Payments are secured by Razorpay / Stripe</p>
+      </div>
+    </div>
+
+    <!-- ============================================================
            VIEW: PAYMENT
            ============================================================ -->
-      <div id="viewPayment" class="view">
-        <div class="view-header">
-          <div class="view-header-brand">
-            <button class="back-btn" id="btnPaymentBack">←</button>
-            <span class="view-header-title">Secure Checkout</span>
+    <div id="viewPayment" class="view">
+      <div class="view-header">
+        <div class="view-header-brand">
+          <button class="back-btn" id="btnPaymentBack">←</button>
+          <span class="view-header-title">Secure Checkout</span>
+        </div>
+      </div>
+      <div class="view-content scrollable">
+        <!-- Order Summary -->
+        <div class="order-summary-card">
+          <div class="order-summary-row">
+            <span class="order-summary-label">Plan</span>
+            <span class="order-summary-value" id="paymentPlanName">Professional</span>
+          </div>
+          <div class="order-summary-row">
+            <span class="order-summary-label">Billing</span>
+            <span class="order-summary-value" id="paymentBillingCycle">Monthly</span>
+          </div>
+          <div class="order-summary-divider"></div>
+          <div class="order-summary-row total-row">
+            <span class="order-summary-label">Total</span>
+            <span class="order-summary-total" id="paymentTotal">₹999</span>
           </div>
         </div>
-        <div class="view-content scrollable">
-          <!-- Order Summary -->
-          <div class="order-summary-card">
-            <div class="order-summary-row">
-              <span class="order-summary-label">Plan</span>
-              <span class="order-summary-value" id="paymentPlanName">Professional</span>
+
+        <!-- Payment Redirect Notice -->
+        <div class="payment-redirect-box">
+          <div class="payment-redirect-icon">🔐</div>
+          <h3 class="payment-redirect-title">Secure Payment Processing</h3>
+          <p class="payment-redirect-desc">
+            You will be redirected to our secure payment portal to complete your subscription. Card details are handled
+            entirely by our payment provider — never stored by FinAccrual.
+          </p>
+          <button class="payment-proceed-btn" id="btnOpenCheckout">
+            <span id="checkoutBtnText">Open Secure Checkout</span>
+            <div class="btn-spinner hidden" id="checkoutSpinner"></div>
+          </button>
+          <p class="payment-already-text">
+            Already paid? <a href="#" id="btnVerifyPayment">Verify my payment →</a>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+           VIEW: SUCCESS
+           ============================================================ -->
+    <div id="viewSuccess" class="view">
+      <div class="success-screen">
+        <div class="success-icon-wrap">
+          <div class="success-check">✓</div>
+        </div>
+        <h2 class="success-title">Account Created!</h2>
+        <p class="success-subtitle">Your FinAccrual subscription is now active.</p>
+
+        <div class="success-id-card">
+          <p class="success-id-label">Subscription ID</p>
+          <div class="success-id-value" id="successSubId">FA-SUB-000000</div>
+        </div>
+
+        <div class="success-plan-card">
+          <p class="success-plan-label">Plan</p>
+          <p class="success-plan-value" id="successPlanName">Professional</p>
+        </div>
+
+        <button class="success-dashboard-btn" id="btnGotoDashboard">
+          Go to Dashboard →
+        </button>
+      </div>
+    </div>
+
+    <!-- ============================================================
+           VIEW: DASHBOARD
+           ============================================================ -->
+    <div id="viewDashboard" class="view">
+
+      <!-- ============================================================
+             DISCONNECTED STATE: Header + Connect cards
+             Shown when no ERP is connected
+             ============================================================ -->
+      <div id="dashDisconnected">
+
+        <!-- Brand Header (disconnected) -->
+        <div class="dash-brand-header pattern-bg">
+          <div class="dash-brand-left">
+            <div class="dash-logo-box">FA</div>
+            <div>
+              <div class="dash-brand-title">FinAccrual</div>
             </div>
-            <div class="order-summary-row">
-              <span class="order-summary-label">Billing</span>
-              <span class="order-summary-value" id="paymentBillingCycle">Monthly</span>
-            </div>
-            <div class="order-summary-divider"></div>
-            <div class="order-summary-row total-row">
-              <span class="order-summary-label">Total</span>
-              <span class="order-summary-total" id="paymentTotal">₹999</span>
+          </div>
+          <div class="dash-brand-right">
+            <button class="dash-avatar-btn header-avatar" id="dashHeaderAvatarBtn1">V</button>
+            <button class="header-collapse-btn">‹</button>
+          </div>
+        </div>
+
+        <!-- Main Scrollable Area -->
+        <div class="dash-main-scrollable">
+          <!-- User row -->
+          <div class="dash-welcome-container">
+            <div class="dash-welcome-text-col">
+              <h2 class="dash-welcome-title" id="dashWelcome">Welcome, Vasavi!</h2>
+              <p class="dash-welcome-subtitle">Let's connect your accounting software to start syncing data with Excel.
+              </p>
             </div>
           </div>
 
-          <!-- Payment Redirect Notice -->
-          <div class="payment-redirect-box">
-            <div class="payment-redirect-icon">🔐</div>
-            <h3 class="payment-redirect-title">Secure Payment Processing</h3>
-            <p class="payment-redirect-desc">
-              You will be redirected to our secure payment portal to complete your subscription. Card details are handled entirely by our payment provider — never stored by FinAccrual.
-            </p>
-            <button class="payment-proceed-btn" id="btnOpenCheckout">
-              <span id="checkoutBtnText">Open Secure Checkout</span>
-              <div class="btn-spinner hidden" id="checkoutSpinner"></div>
-            </button>
-            <p class="payment-already-text">
-              Already paid? <a href="#" id="btnVerifyPayment">Verify my payment →</a>
-            </p>
+          <!-- Plan Info Box -->
+          <div class="dash-plan-summary-card">
+            <div class="plan-col">
+              <span class="plan-col-label">Subscription ID</span>
+              <span class="plan-col-value">
+                <span id="dashSubId">FA-SUB-599645</span>
+                <button class="btn-copy-subid" id="btnCopySubId" title="Copy Subscription ID">
+                  <svg class="icon-copy-svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </span>
+            </div>
+            <div class="plan-col-divider"></div>
+            <div class="plan-col">
+              <span class="plan-col-label">Plan</span>
+              <span class="plan-col-badge-green" id="dashPlanBadge">Basic Plan</span>
+            </div>
+            <div class="plan-col-divider"></div>
+            <div class="plan-col">
+              <span class="plan-col-label">Status</span>
+              <span class="plan-col-status"><span class="status-dot-green">●</span> Active</span>
+            </div>
           </div>
+
+          <!-- Connect Cards Section -->
+          <div class="dash-connect-section">
+            <div class="connect-section-header">
+              <div class="connect-icon-circle">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+              </div>
+              <div class="connect-header-text">
+                <div class="connect-title">Connect Accounting Software</div>
+                <div class="connect-subtitle">Link your accounting software to start syncing data with Excel.</div>
+              </div>
+            </div>
+            <div class="erp-provider-cards-large">
+              <div class="erp-card-large" id="btnConnectQB" role="button" tabindex="0">
+                <div class="erp-logo-large qb-logo-circle">
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                    <circle cx="16" cy="16" r="16" fill="#2CA01C" />
+                    <text x="16" y="21" font-size="14" font-weight="800" fill="white" text-anchor="middle"
+                      font-family="'Inter', sans-serif">qb</text>
+                  </svg>
+                </div>
+                <h3 class="erp-card-title">QuickBooks</h3>
+                <p class="erp-card-desc">Connect and sync your QuickBooks data with Excel.</p>
+                <div class="btn-connect-full btn-qb-full">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                  Connect QuickBooks →
+                </div>
+              </div>
+              <div class="erp-card-large" id="btnConnectXero" role="button" tabindex="0">
+                <div class="erp-logo-large xero-logo-circle">
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                    <circle cx="16" cy="16" r="16" fill="#13B5EA" />
+                    <text x="16" y="21" font-size="12" font-weight="800" fill="white" text-anchor="middle"
+                      font-family="'Inter', sans-serif">xero</text>
+                  </svg>
+                </div>
+                <h3 class="erp-card-title">Xero</h3>
+                <p class="erp-card-desc">Connect and sync your Xero data with Excel.</p>
+                <div class="btn-connect-full btn-xero-full">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                  Connect Xero →
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- ============================================================
+             CONNECTING STATE: OAuth popup launched, waiting for callback
+             ============================================================ -->
+      <div id="dashConnecting" style="display:none; flex-direction:column; height:100%;">
+        <!-- Premium Header (connecting) -->
+        <div class="conn-header"
+          style="background: #172b56; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 52px; box-sizing: border-box;">
+          <div class="conn-brand-left" style="display: flex; align-items: center; gap: 8px;">
+            <div class="conn-logo-box"
+              style="width: 28px; height: 28px; background: white; border-radius: 6px; color: #172b56; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 11px;">
+              FA</div>
+            <div class="conn-brand-title" style="font-weight: 700; color: white; font-size: 13px;">FinAccrual</div>
+          </div>
+        </div>
+        <div class="conn-body"
+          style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 24px; gap: 16px; min-height: 250px; box-sizing: border-box;">
+          <div class="loading-spinner"
+            style="width: 32px; height: 32px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite;">
+          </div>
+          <p id="connectingText"
+            style="font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600; color: #0F2D6B; margin: 0; text-align: center;">
+            Connecting with Xero...</p>
         </div>
       </div>
 
       <!-- ============================================================
-           VIEW: SUCCESS
-           ============================================================ -->
-      <div id="viewSuccess" class="view">
-        <div class="success-screen">
-          <div class="success-icon-wrap">
-            <div class="success-check">✓</div>
-          </div>
-          <h2 class="success-title">Account Created!</h2>
-          <p class="success-subtitle">Your FinAccrual subscription is now active.</p>
+             NOT-CONNECTED STATE: Provider chosen but OAuth not done
+             Shown when user clicks QuickBooks/Xero card (Image 4)
+             ============================================================ -->
+      <div id="dashProviderSelected" style="display:none; flex-direction:column; height:100%;">
 
-          <div class="success-id-card">
-            <p class="success-id-label">Subscription ID</p>
-            <div class="success-id-value" id="successSubId">FA-SUB-000000</div>
+        <!-- ---- Dark Brand Header ---- -->
+        <div class="conn-header">
+          <div class="conn-header-row1">
+            <div class="conn-brand-left">
+              <div class="conn-logo-box">FA</div>
+              <div>
+                <div class="conn-brand-title">FinAccrual</div>
+              </div>
+            </div>
+            <div class="conn-header-right">
+              <button class="dash-avatar-btn header-avatar" id="dashHeaderAvatarBtn2">A</button>
+            </div>
           </div>
 
-          <div class="success-plan-card">
-            <p class="success-plan-label">Plan</p>
-            <p class="success-plan-value" id="successPlanName">Professional</p>
+          <div class="conn-header-row2">
+            <!-- Plan badge -->
+            <span class="conn-tier-badge" id="providerPlanBadge">QBO PRO</span>
+            <!-- Not connected status -->
+            <span class="conn-status-dot-red">●</span>
+            <span class="conn-status-text-dim">Not connected</span>
+            <!-- Green Connect button -->
+            <button class="conn-connect-provider-btn" id="btnConnectProvider">Connect QuickBooks</button>
+          </div>
+        </div>
+
+        <!-- ---- Scrollable body ---- -->
+        <div class="conn-body scrollable">
+
+          <!-- JOURNAL TYPE -->
+          <div class="conn-section-label">Journal Type</div>
+          <div class="conn-journal-btns">
+            <button class="conn-journal-btn active" data-type="accrual">Accrual</button>
+            <button class="conn-journal-btn" data-type="prepaid">Prepaid</button>
+            <button class="conn-journal-btn" data-type="deferred">Deferred Rev</button>
           </div>
 
-          <button class="success-dashboard-btn" id="btnGotoDashboard">
-            Go to Dashboard →
+          <!-- SCHEDULE -->
+          <div class="schedule-header-row">
+            <span class="conn-section-label">Schedule</span>
+            <button id="btnRefreshScheduleProv" class="refresh-schedule-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round" class="refresh-icon">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+              </svg>
+              Refresh Schedule
+            </button>
+          </div>
+          <button id="setupBtnProv" class="conn-action-btn primary-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Setup Master &amp; Input Sheets
+          </button>
+          <button id="pullBtnProv" class="conn-action-btn secondary-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Pull Master Data from&nbsp;<span id="pullBtnProvLabel">QBO</span>
+          </button>
+
+          <!-- PROGRESS STEPS -->
+          <div class="conn-progress-panel" id="provConsole">
+            <div class="conn-step" id="provStepConnect">
+              <span class="conn-step-num">1</span>
+              <span class="conn-step-label" id="provStep1Label">Connect to QuickBooks</span>
+            </div>
+            <div class="conn-step" id="provStepSetup">
+              <span class="conn-step-num">2</span>
+              <span class="conn-step-label">Setup Master &amp; Input Sheets</span>
+            </div>
+            <div class="conn-step" id="provStepPull">
+              <span class="conn-step-num">3</span>
+              <span class="conn-step-label" id="provStep3Label">Pull Master Data</span>
+            </div>
+            <div class="conn-log" id="provLog"></div>
+          </div>
+
+        </div>
+        <!-- /conn-body -->
+      </div>
+      <!-- /dashProviderSelected -->
+
+      <!-- ============================================================
+             CONNECTED STATE: Full connected layout (Image 3)
+             Shown after ERP OAuth is connected
+             ============================================================ -->
+      <div id="dashConnected" style="display:none; flex-direction:column; height:100%;">
+
+        <!-- ── PREMIUM HEADER ─────────────────────────────────── -->
+        <div class="fa-header">
+          <div class="fa-header-left">
+            <div class="fa-logo-box">FA</div>
+            <div class="fa-header-text">
+              <div class="fa-brand-name">FinAccrual</div>
+            </div>
+          </div>
+          <div class="fa-header-right">
+            <span class="fa-plan-badge" id="connTierBadge">PRO PLAN</span>
+            <button class="fa-notif-bell-btn" id="notifBellBtn" title="Notifications" aria-label="Notifications">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              <span class="fa-notif-badge" id="notifBadge" style="display:none;">0</span>
+            </button>
+            <button class="fa-avatar-btn" id="dashHeaderAvatarBtn3">V</button>
+          </div>
+        </div>
+
+        <!-- Header row 2: Realm + status -->
+        <div class="fa-header-row2">
+          <button class="fa-disconnect-btn" id="btnDisconnectERP">Disconnect</button>
+          <span class="fa-conn-dot">●</span>
+          <span class="fa-conn-status"><span class="fa-realm-label">Realm ID:</span> <span
+              id="connRealmId">—</span></span>
+        </div>
+
+        <!-- Notification Drawer (opens directly below the header) -->
+        <div class="fa-notif-drawer-anchor">
+          <div class="fa-notif-drawer" id="notifDrawer" style="display:none;">
+            <div class="fa-notif-drawer-header">
+              <span class="fa-notif-drawer-title">Notifications</span>
+              <button class="fa-notif-clear-btn" id="notifClearAllBtn">Clear All</button>
+            </div>
+            <div class="fa-notif-list" id="notifList">
+              <!-- Populated dynamically by JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ── SCROLLABLE BODY ─────────────────────────────────── -->
+        <div class="fa-body scrollable">
+
+          <!-- COMPANY MANAGEMENT SECTION -->
+          <div class="fa-section-header">
+            <span class="fa-section-title">Company Management</span>
+            <button class="fa-btn-add" id="btnAddCompany">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              Add Another Company
+            </button>
+          </div>
+
+          <!-- Company List -->
+          <div class="fa-company-list" id="companyList">
+            <!-- Populated dynamically by JS -->
+          </div>
+          <div class="fa-company-list-footer" id="companyListFooter">Showing — companies</div>
+
+          <!-- SUBSCRIPTION INFO CARD -->
+          <div class="fa-sub-card">
+            <div class="fa-sub-title">Current Plan</div>
+            <div class="fa-sub-stats">
+              <div class="fa-sub-stat">
+                <div class="fa-sub-stat-label">Current Plan</div>
+                <div class="fa-sub-stat-value" id="subInfoPlan">Basic</div>
+              </div>
+              <div class="fa-sub-stat-divider"></div>
+              <div class="fa-sub-stat">
+                <div class="fa-sub-stat-label">Connected Companies</div>
+                <div class="fa-sub-stat-value" id="subInfoConnected">0 / 1</div>
+              </div>
+              <div class="fa-sub-stat-divider"></div>
+              <div class="fa-sub-stat">
+                <div class="fa-sub-stat-label">Remaining</div>
+                <div class="fa-sub-stat-value" id="subInfoRemaining">1</div>
+              </div>
+            </div>
+            <div class="fa-sub-actions">
+              <button class="fa-btn-sub-outline" id="btnSubChangePlan">Change Plan</button>
+              <button class="fa-btn-sub-outline" id="btnManageCompanies">Manage Companies</button>
+            </div>
+          </div>
+
+          <!-- JOURNAL TYPE -->
+          <div class="fa-section-label">Journal Type</div>
+          <div class="fa-journal-btns">
+            <button class="fa-journal-btn active" data-type="accrual">Accrual</button>
+            <button class="fa-journal-btn" data-type="prepaid">Prepaid</button>
+            <button class="fa-journal-btn" data-type="deferred">Deferred Rev</button>
+          </div>
+
+          <!-- SCHEDULE -->
+          <div class="schedule-header-row">
+            <span class="fa-section-label">Schedule</span>
+            <button id="btnRefreshSchedule" class="refresh-schedule-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round" class="refresh-icon">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+              </svg>
+              Refresh Schedule
+            </button>
+          </div>
+          <button id="setupBtn" class="conn-action-btn primary-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Setup Master &amp; Input Sheets
+          </button>
+          <button id="pullBtn" class="conn-action-btn secondary-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Pull Master Data from&nbsp;<span id="pullBtnLabel">QBO</span>
+          </button>
+
+          <!-- PROGRESS PANELS -->
+          <div class="conn-progress-panel" id="qbConsole">
+            <div class="conn-step" id="stepConnect"><span class="conn-step-num">1</span><span
+                class="conn-step-label">Connect to QuickBooks</span></div>
+            <div class="conn-step" id="stepSetup"><span class="conn-step-num">2</span><span
+                class="conn-step-label">Setup Master &amp; Input Sheets</span></div>
+            <div class="conn-step" id="stepPull"><span class="conn-step-num">3</span><span class="conn-step-label">Pull
+                Master Data from QBO</span></div>
+            <div class="conn-log" id="qbLog"></div>
+          </div>
+          <div class="conn-progress-panel" id="xeroConsole" style="display:none;">
+            <div class="conn-step" id="xeroStepConnect"><span class="conn-step-num">1</span><span
+                class="conn-step-label">Connect to Xero</span></div>
+            <div class="conn-step" id="xeroStepSetup"><span class="conn-step-num">2</span><span
+                class="conn-step-label">Setup Master &amp; Input Sheets</span></div>
+            <div class="conn-step" id="xeroStepPull"><span class="conn-step-num">3</span><span
+                class="conn-step-label">Pull Master Data from Xero</span></div>
+            <div class="conn-log" id="xeroLog"></div>
+          </div>
+
+        </div>
+        <!-- /fa-body -->
+      </div>
+      <!-- /dashConnected -->
+
+      <!-- ── CHANGE COMPANY MODAL ──────────────────────────────── -->
+      <div class="fa-modal-overlay" id="changeCompanyModal" style="display:none;">
+        <div class="fa-modal">
+          <div class="fa-modal-header">
+            <span class="fa-modal-title">Change Active Company</span>
+            <button class="fa-modal-close" id="btnCloseChangeCompany">✕</button>
+          </div>
+          <div class="fa-modal-search-wrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7a9a" stroke-width="2"
+              stroke-linecap="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input type="text" id="companySearchInput" class="fa-modal-search" placeholder="Search companies...">
+          </div>
+          <div class="fa-modal-list" id="modalCompanyList">
+            <!-- Populated dynamically -->
+          </div>
+          <div class="fa-modal-link-row">
+            <span class="fa-modal-link-text">Can't find your company?</span>
+            <button class="fa-modal-add-link" id="btnModalAddCompany">+ Add Another Company</button>
+          </div>
+          <div class="fa-modal-footer">
+            <button class="fa-btn-modal-cancel" id="btnCancelChangeCompany">Cancel</button>
+            <button class="fa-btn-modal-primary" id="btnConfirmChangeCompany">Switch Company</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── COMPANY THREE-DOT CONTEXT MENU ──────────────────── -->
+      <div class="fa-context-menu" id="companyContextMenu" style="display:none;">
+        <button class="fa-context-item" id="ctxEdit">Edit</button>
+        <button class="fa-context-item" id="ctxDisconnect">Disconnect</button>
+      </div>
+
+      <!-- ── RENAME COMPANY MODAL ────────────────────────────── -->
+      <div class="fa-modal-overlay" id="renameCompanyModal" style="display:none;">
+        <div class="fa-modal">
+          <div class="fa-modal-header">
+            <span class="fa-modal-title">Rename Company</span>
+            <button class="fa-modal-close" id="btnCloseRenameCompany">✕</button>
+          </div>
+          <div style="padding: 16px;">
+            <label for="renameCompanyInput"
+              style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:#4a5568;">Company Display
+              Name</label>
+            <input type="text" id="renameCompanyInput" class="fa-modal-search" placeholder="Enter company name..."
+              style="width:100%; box-sizing:border-box;" />
+          </div>
+          <div class="fa-modal-footer">
+            <button class="fa-btn-modal-cancel" id="btnCancelRenameCompany">Cancel</button>
+            <button class="fa-btn-modal-primary" id="btnConfirmRenameCompany">Save</button>
+          </div>
+        </div>
+      </div>
+
+
+
+
+      <!-- Account Menu Dropdown Overlay -->
+      <div class="account-menu-dropdown" id="accountMenuDropdown" style="display:none;">
+        <div class="dropdown-user-header">
+          <div class="dash-avatar-btn dropdown-avatar" id="dropdownAvatar">A</div>
+          <div class="dropdown-user-info">
+            <div class="dropdown-user-name" id="dropdownUserName">Yana</div>
+            <div class="dropdown-user-email" id="dropdownUserEmail">yana.developer@gmail.com</div>
+          </div>
+        </div>
+        <div class="dropdown-menu-list">
+          <button class="dropdown-menu-item" data-target="blockAccount">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg> Manage Account
+          </button>
+          <button class="dropdown-menu-item" data-target="blockSettings">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+              </path>
+            </svg> Settings
+          </button>
+          <button class="dropdown-menu-item" data-target="blockPlan">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+              <line x1="1" y1="10" x2="23" y2="10"></line>
+            </svg> Plan Details
+          </button>
+          <button class="dropdown-menu-item" id="btnChangePlan">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="17 1 21 5 17 9"></polyline>
+              <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+              <polyline points="7 23 3 19 7 15"></polyline>
+              <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+            </svg> Change Plan
+          </button>
+          <button class="dropdown-menu-item" data-target="blockHelp">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg> Need Help
+          </button>
+          <button class="dropdown-menu-item" data-target="blockInstructions">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+            </svg> Instructions
+          </button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-menu-item text-red" id="btnDropdownLogout">
+            <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg> Logout
           </button>
         </div>
       </div>
 
-      <!-- ============================================================
-           VIEW: DASHBOARD
-           ============================================================ -->
-      <div id="viewDashboard" class="view">
+      <!-- Detail Block Cards Container -->
+      <div class="detail-blocks-container" id="detailBlocksContainer" style="display:none;">
 
-        <!-- ============================================================
-             DISCONNECTED STATE: Header + Connect cards
-             Shown when no ERP is connected
-             ============================================================ -->
-        <div id="dashDisconnected">
-
-          <!-- Brand Header (disconnected) -->
-          <div class="dash-brand-header pattern-bg">
-            <div class="dash-brand-left">
-              <div class="dash-logo-box">FA</div>
+        <!-- Account Block -->
+        <div class="detail-block-card" id="blockAccount" style="display:none;">
+          <div class="detail-block-header">
+            <h3>Account</h3>
+            <button class="close-block-btn">✕</button>
+          </div>
+          <div class="detail-block-body">
+            <div class="block-user-info">
+              <div class="dash-avatar-btn block-avatar" id="blockAvatar">A</div>
               <div>
-                <div class="dash-brand-title">FinAccrual</div>
+                <div class="block-user-name" id="blockUserName">Yana</div>
+                <div class="block-user-email" id="blockUserEmail">yana.developer@gmail.com</div>
               </div>
             </div>
-            <div class="dash-brand-right">
-              <button class="dash-avatar-btn header-avatar" id="dashHeaderAvatarBtn1">V</button>
-              <button class="header-collapse-btn">‹</button>
+            <div class="block-details-grid">
+              <span>Subscription ID</span><span class="val" id="blockSubId">FA-SUB-430154</span>
+              <span>Plan</span><span class="val green" id="blockPlanName">Starter Plan</span>
+              <span>Status</span><span class="val green">● Active</span>
+              <span>Member Since</span><span class="val" id="blockMemberDate">22 Jul 2025</span>
             </div>
-          </div>
-
-          <!-- Main Scrollable Area -->
-          <div class="dash-main-scrollable">
-            <!-- User row -->
-            <div class="dash-welcome-container">
-              <div class="dash-welcome-text-col">
-                <h2 class="dash-welcome-title" id="dashWelcome">Welcome, Vasavi!</h2>
-                <p class="dash-welcome-subtitle">Let's connect your accounting software to start syncing data with Excel.</p>
-              </div>
-            </div>
-
-            <!-- Plan Info Box -->
-            <div class="dash-plan-summary-card">
-              <div class="plan-col">
-                <span class="plan-col-label">Subscription ID</span>
-                <span class="plan-col-value">
-                  <span id="dashSubId">FA-SUB-599645</span>
-                  <button class="btn-copy-subid" id="btnCopySubId" title="Copy Subscription ID">
-                    <svg class="icon-copy-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                  </button>
-                </span>
-              </div>
-              <div class="plan-col-divider"></div>
-              <div class="plan-col">
-                <span class="plan-col-label">Plan</span>
-                <span class="plan-col-badge-green" id="dashPlanBadge">Basic Plan</span>
-              </div>
-              <div class="plan-col-divider"></div>
-              <div class="plan-col">
-                <span class="plan-col-label">Status</span>
-                <span class="plan-col-status"><span class="status-dot-green">●</span> Active</span>
-              </div>
-            </div>
-
-            <!-- Connect Cards Section -->
-            <div class="dash-connect-section">
-              <div class="connect-section-header">
-                <div class="connect-icon-circle">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                  </svg>
-                </div>
-                <div class="connect-header-text">
-                  <div class="connect-title">Connect Accounting Software</div>
-                  <div class="connect-subtitle">Link your accounting software to start syncing data with Excel.</div>
-                </div>
-              </div>
-              <div class="erp-provider-cards-large">
-                <div class="erp-card-large" id="btnConnectQB" role="button" tabindex="0">
-                  <div class="erp-logo-large qb-logo-circle">
-                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                      <circle cx="16" cy="16" r="16" fill="#2CA01C"/>
-                      <text x="16" y="21" font-size="14" font-weight="800" fill="white" text-anchor="middle" font-family="'Inter', sans-serif">qb</text>
-                    </svg>
-                  </div>
-                  <h3 class="erp-card-title">QuickBooks</h3>
-                  <p class="erp-card-desc">Connect and sync your QuickBooks data with Excel.</p>
-                  <div class="btn-connect-full btn-qb-full">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                    </svg>
-                    Connect QuickBooks →
-                  </div>
-                </div>
-                <div class="erp-card-large" id="btnConnectXero" role="button" tabindex="0">
-                  <div class="erp-logo-large xero-logo-circle">
-                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                      <circle cx="16" cy="16" r="16" fill="#13B5EA"/>
-                      <text x="16" y="21" font-size="12" font-weight="800" fill="white" text-anchor="middle" font-family="'Inter', sans-serif">xero</text>
-                    </svg>
-                  </div>
-                  <h3 class="erp-card-title">Xero</h3>
-                  <p class="erp-card-desc">Connect and sync your Xero data with Excel.</p>
-                  <div class="btn-connect-full btn-xero-full">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                    </svg>
-                    Connect Xero →
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-        </div>
-
-        <!-- ============================================================
-             CONNECTING STATE: OAuth popup launched, waiting for callback
-             ============================================================ -->
-        <div id="dashConnecting" style="display:none; flex-direction:column; height:100%;">
-          <!-- Premium Header (connecting) -->
-          <div class="conn-header" style="background: #172b56; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 52px; box-sizing: border-box;">
-            <div class="conn-brand-left" style="display: flex; align-items: center; gap: 8px;">
-              <div class="conn-logo-box" style="width: 28px; height: 28px; background: white; border-radius: 6px; color: #172b56; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 11px;">FA</div>
-              <div class="conn-brand-title" style="font-weight: 700; color: white; font-size: 13px;">FinAccrual</div>
-            </div>
-          </div>
-          <div class="conn-body" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 24px; gap: 16px; min-height: 250px; box-sizing: border-box;">
-            <div class="loading-spinner" style="width: 32px; height: 32px; border: 3px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-            <p id="connectingText" style="font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600; color: #0F2D6B; margin: 0; text-align: center;">Connecting with Xero...</p>
+            <button class="block-action-btn">👤 Manage Account <span>›</span></button>
+            <button class="block-logout-btn" id="btnBlockLogout">🚪 Logout</button>
           </div>
         </div>
 
-        <!-- ============================================================
-             NOT-CONNECTED STATE: Provider chosen but OAuth not done
-             Shown when user clicks QuickBooks/Xero card (Image 4)
-             ============================================================ -->
-        <div id="dashProviderSelected" style="display:none; flex-direction:column; height:100%;">
-
-          <!-- ---- Dark Brand Header ---- -->
-          <div class="conn-header">
-            <div class="conn-header-row1">
-              <div class="conn-brand-left">
-                <div class="conn-logo-box">FA</div>
-                <div>
-                  <div class="conn-brand-title">FinAccrual</div>
-                </div>
-              </div>
-              <div class="conn-header-right">
-                <button class="dash-avatar-btn header-avatar" id="dashHeaderAvatarBtn2">A</button>
-              </div>
-            </div>
-
-            <div class="conn-header-row2">
-              <!-- Plan badge -->
-              <span class="conn-tier-badge" id="providerPlanBadge">QBO PRO</span>
-              <!-- Not connected status -->
-              <span class="conn-status-dot-red">●</span>
-              <span class="conn-status-text-dim">Not connected</span>
-              <!-- Green Connect button -->
-              <button class="conn-connect-provider-btn" id="btnConnectProvider">Connect QuickBooks</button>
-            </div>
+        <!-- Settings Block -->
+        <div class="detail-block-card" id="blockSettings" style="display:none;">
+          <div class="detail-block-header">
+            <h3>Settings</h3>
+            <button class="close-block-btn">✕</button>
           </div>
-
-          <!-- ---- Scrollable body ---- -->
-          <div class="conn-body scrollable">
-
-            <!-- JOURNAL TYPE -->
-            <div class="conn-section-label">Journal Type</div>
-            <div class="conn-journal-btns">
-              <button class="conn-journal-btn active" data-type="accrual">Accrual</button>
-              <button class="conn-journal-btn" data-type="prepaid">Prepaid</button>
-              <button class="conn-journal-btn" data-type="deferred">Deferred Rev</button>
+          <div class="detail-block-body">
+            <h4>General Settings</h4>
+            <div class="form-group">
+              <label>Default ERP</label>
+              <select class="block-select">
+                <option>QuickBooks</option>
+                <option>Xero</option>
+              </select>
             </div>
-
-            <!-- SCHEDULE -->
-            <div class="schedule-header-row">
-              <span class="conn-section-label">Schedule</span>
-              <button id="btnRefreshScheduleProv" class="refresh-schedule-btn">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="refresh-icon"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-                Refresh Schedule
-              </button>
+            <div class="form-group">
+              <label>Sync Frequency</label>
+              <select class="block-select">
+                <option>Daily</option>
+                <option>Weekly</option>
+              </select>
             </div>
-            <button id="setupBtnProv" class="conn-action-btn primary-btn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              Setup Master &amp; Input Sheets
-            </button>
-            <button id="pullBtnProv" class="conn-action-btn secondary-btn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-              Pull Master Data from&nbsp;<span id="pullBtnProvLabel">QBO</span>
-            </button>
-
-            <!-- PROGRESS STEPS -->
-            <div class="conn-progress-panel" id="provConsole">
-              <div class="conn-step" id="provStepConnect">
-                <span class="conn-step-num">1</span>
-                <span class="conn-step-label" id="provStep1Label">Connect to QuickBooks</span>
-              </div>
-              <div class="conn-step" id="provStepSetup">
-                <span class="conn-step-num">2</span>
-                <span class="conn-step-label">Setup Master &amp; Input Sheets</span>
-              </div>
-              <div class="conn-step" id="provStepPull">
-                <span class="conn-step-num">3</span>
-                <span class="conn-step-label" id="provStep3Label">Pull Master Data</span>
-              </div>
-              <div class="conn-log" id="provLog"></div>
+            <h4>Data Options</h4>
+            <div class="toggle-row">
+              <span>Auto Sync on Open</span>
+              <label class="toggle-switch-sm"><input type="checkbox" checked><span
+                  class="toggle-slider-sm"></span></label>
             </div>
-
-          </div>
-          <!-- /conn-body -->
-        </div>
-        <!-- /dashProviderSelected -->
-
-        <!-- ============================================================
-             CONNECTED STATE: Full connected layout (Image 3)
-             Shown after ERP OAuth is connected
-             ============================================================ -->
-        <div id="dashConnected" style="display:none; flex-direction:column; height:100%;">
-
-          <!-- ── PREMIUM HEADER ─────────────────────────────────── -->
-          <div class="fa-header">
-            <div class="fa-header-left">
-              <div class="fa-logo-box">FA</div>
-              <div class="fa-header-text">
-                <div class="fa-brand-name">FinAccrual</div>
-              </div>
+            <div class="toggle-row">
+              <span>Show Notifications</span>
+              <label class="toggle-switch-sm"><input type="checkbox" checked><span
+                  class="toggle-slider-sm"></span></label>
             </div>
-            <div class="fa-header-right">
-              <span class="fa-plan-badge" id="connTierBadge">PRO PLAN</span>
-              <button class="fa-notif-bell-btn" id="notifBellBtn" title="Notifications" aria-label="Notifications">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-                <span class="fa-notif-badge" id="notifBadge" style="display:none;">0</span>
-              </button>
-              <button class="fa-avatar-btn" id="dashHeaderAvatarBtn3">V</button>
-            </div>
-          </div>
-
-          <!-- Header row 2: Realm + status -->
-          <div class="fa-header-row2">
-            <button class="fa-disconnect-btn" id="btnDisconnectERP">Disconnect</button>
-            <span class="fa-conn-dot">●</span>
-            <span class="fa-conn-status"><span class="fa-realm-label">Realm ID:</span> <span id="connRealmId">—</span></span>
-          </div>
-
-          <!-- Notification Drawer (opens directly below the header) -->
-          <div class="fa-notif-drawer-anchor">
-            <div class="fa-notif-drawer" id="notifDrawer" style="display:none;">
-              <div class="fa-notif-drawer-header">
-                <span class="fa-notif-drawer-title">Notifications</span>
-                <button class="fa-notif-clear-btn" id="notifClearAllBtn">Clear All</button>
-              </div>
-              <div class="fa-notif-list" id="notifList">
-                <!-- Populated dynamically by JS -->
-              </div>
-            </div>
-          </div>
-
-          <!-- ── SCROLLABLE BODY ─────────────────────────────────── -->
-          <div class="fa-body scrollable">
-
-            <!-- COMPANY MANAGEMENT SECTION -->
-            <div class="fa-section-header">
-              <span class="fa-section-title">Company Management</span>
-              <button class="fa-btn-add" id="btnAddCompany">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add Another Company
-              </button>
-            </div>
-
-            <!-- Company List -->
-            <div class="fa-company-list" id="companyList">
-              <!-- Populated dynamically by JS -->
-            </div>
-            <div class="fa-company-list-footer" id="companyListFooter">Showing — companies</div>
-
-            <!-- SUBSCRIPTION INFO CARD -->
-            <div class="fa-sub-card">
-              <div class="fa-sub-title">Current Plan</div>
-              <div class="fa-sub-stats">
-                <div class="fa-sub-stat">
-                  <div class="fa-sub-stat-label">Current Plan</div>
-                  <div class="fa-sub-stat-value" id="subInfoPlan">Basic</div>
-                </div>
-                <div class="fa-sub-stat-divider"></div>
-                <div class="fa-sub-stat">
-                  <div class="fa-sub-stat-label">Connected Companies</div>
-                  <div class="fa-sub-stat-value" id="subInfoConnected">0 / 1</div>
-                </div>
-                <div class="fa-sub-stat-divider"></div>
-                <div class="fa-sub-stat">
-                  <div class="fa-sub-stat-label">Remaining</div>
-                  <div class="fa-sub-stat-value" id="subInfoRemaining">1</div>
-                </div>
-              </div>
-              <div class="fa-sub-actions">
-                <button class="fa-btn-sub-outline" id="btnSubChangePlan">Change Plan</button>
-                <button class="fa-btn-sub-outline" id="btnManageCompanies">Manage Companies</button>
-              </div>
-            </div>
-
-            <!-- JOURNAL TYPE -->
-            <div class="fa-section-label">Journal Type</div>
-            <div class="fa-journal-btns">
-              <button class="fa-journal-btn active" data-type="accrual">Accrual</button>
-              <button class="fa-journal-btn" data-type="prepaid">Prepaid</button>
-              <button class="fa-journal-btn" data-type="deferred">Deferred Rev</button>
-            </div>
-
-            <!-- SCHEDULE -->
-            <div class="schedule-header-row">
-              <span class="fa-section-label">Schedule</span>
-              <button id="btnRefreshSchedule" class="refresh-schedule-btn">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="refresh-icon"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-                Refresh Schedule
-              </button>
-            </div>
-            <button id="setupBtn" class="conn-action-btn primary-btn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              Setup Master &amp; Input Sheets
-            </button>
-            <button id="pullBtn" class="conn-action-btn secondary-btn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-              Pull Master Data from&nbsp;<span id="pullBtnLabel">QBO</span>
-            </button>
-
-            <!-- PROGRESS PANELS -->
-            <div class="conn-progress-panel" id="qbConsole">
-              <div class="conn-step" id="stepConnect"><span class="conn-step-num">1</span><span class="conn-step-label">Connect to QuickBooks</span></div>
-              <div class="conn-step" id="stepSetup"><span class="conn-step-num">2</span><span class="conn-step-label">Setup Master &amp; Input Sheets</span></div>
-              <div class="conn-step" id="stepPull"><span class="conn-step-num">3</span><span class="conn-step-label">Pull Master Data from QBO</span></div>
-              <div class="conn-log" id="qbLog"></div>
-            </div>
-            <div class="conn-progress-panel" id="xeroConsole" style="display:none;">
-              <div class="conn-step" id="xeroStepConnect"><span class="conn-step-num">1</span><span class="conn-step-label">Connect to Xero</span></div>
-              <div class="conn-step" id="xeroStepSetup"><span class="conn-step-num">2</span><span class="conn-step-label">Setup Master &amp; Input Sheets</span></div>
-              <div class="conn-step" id="xeroStepPull"><span class="conn-step-num">3</span><span class="conn-step-label">Pull Master Data from Xero</span></div>
-              <div class="conn-log" id="xeroLog"></div>
-            </div>
-
-          </div>
-          <!-- /fa-body -->
-        </div>
-        <!-- /dashConnected -->
-
-        <!-- ── CHANGE COMPANY MODAL ──────────────────────────────── -->
-        <div class="fa-modal-overlay" id="changeCompanyModal" style="display:none;">
-          <div class="fa-modal">
-            <div class="fa-modal-header">
-              <span class="fa-modal-title">Change Active Company</span>
-              <button class="fa-modal-close" id="btnCloseChangeCompany">✕</button>
-            </div>
-            <div class="fa-modal-search-wrap">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7a9a" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="text" id="companySearchInput" class="fa-modal-search" placeholder="Search companies...">
-            </div>
-            <div class="fa-modal-list" id="modalCompanyList">
-              <!-- Populated dynamically -->
-            </div>
-            <div class="fa-modal-link-row">
-              <span class="fa-modal-link-text">Can't find your company?</span>
-              <button class="fa-modal-add-link" id="btnModalAddCompany">+ Add Another Company</button>
-            </div>
-            <div class="fa-modal-footer">
-              <button class="fa-btn-modal-cancel" id="btnCancelChangeCompany">Cancel</button>
-              <button class="fa-btn-modal-primary" id="btnConfirmChangeCompany">Switch Company</button>
-            </div>
+            <button class="block-save-btn">Save Changes</button>
           </div>
         </div>
 
-        <!-- ── COMPANY THREE-DOT CONTEXT MENU ──────────────────── -->
-        <div class="fa-context-menu" id="companyContextMenu" style="display:none;">
-          <button class="fa-context-item" id="ctxEdit">Edit</button>
-          <button class="fa-context-item" id="ctxDisconnect">Disconnect</button>
-        </div>
-
-        <!-- ── RENAME COMPANY MODAL ────────────────────────────── -->
-        <div class="fa-modal-overlay" id="renameCompanyModal" style="display:none;">
-          <div class="fa-modal">
-            <div class="fa-modal-header">
-              <span class="fa-modal-title">Rename Company</span>
-              <button class="fa-modal-close" id="btnCloseRenameCompany">✕</button>
+        <!-- Plan Details Block -->
+        <div class="detail-block-card" id="blockPlan" style="display:none;">
+          <div class="detail-block-header">
+            <h3>Plan Details</h3>
+            <button class="close-block-btn">✕</button>
+          </div>
+          <div class="detail-block-body">
+            <div class="plan-overview">
+              <div class="plan-icon-lg">👑</div>
+              <div>
+                <div class="plan-title" id="blockPlanTitle">Starter Plan</div>
+                <div class="plan-status">● Active</div>
+              </div>
             </div>
-            <div style="padding: 16px;">
-              <label for="renameCompanyInput" style="display:block; font-size:12px; font-weight:600; margin-bottom:6px; color:#4a5568;">Company Display Name</label>
-              <input type="text" id="renameCompanyInput" class="fa-modal-search" placeholder="Enter company name..." style="width:100%; box-sizing:border-box;" />
+            <div class="block-details-grid">
+              <span>Plan Type</span><span class="val" id="blockPlanType">Starter Plan</span>
+              <span>Status</span><span class="val green">● Active</span>
+              <span>Billing Amount</span><span class="val" id="blockBillingAmount">$29 / month</span>
+              <span>Valid Until</span><span class="val" id="blockValidUntil">22 Aug 2026</span>
             </div>
-            <div class="fa-modal-footer">
-              <button class="fa-btn-modal-cancel" id="btnCancelRenameCompany">Cancel</button>
-              <button class="fa-btn-modal-primary" id="btnConfirmRenameCompany">Save</button>
-            </div>
+            <p class="plan-footer-note">Your plan is active. Enjoy all starter plan features.</p>
           </div>
         </div>
 
-
-
-
-        <!-- Account Menu Dropdown Overlay -->
-        <div class="account-menu-dropdown" id="accountMenuDropdown" style="display:none;">
-          <div class="dropdown-user-header">
-            <div class="dash-avatar-btn dropdown-avatar" id="dropdownAvatar">A</div>
-            <div class="dropdown-user-info">
-              <div class="dropdown-user-name" id="dropdownUserName">Yana</div>
-              <div class="dropdown-user-email" id="dropdownUserEmail">yana.developer@gmail.com</div>
-            </div>
+        <!-- Need Help Block -->
+        <div class="detail-block-card" id="blockHelp" style="display:none;">
+          <div class="detail-block-header">
+            <h3>Need Help</h3>
+            <button class="close-block-btn">✕</button>
           </div>
-          <div class="dropdown-menu-list">
-            <button class="dropdown-menu-item" data-target="blockAccount">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> Manage Account
+          <div class="detail-block-body">
+            <h4>We're here to help!</h4>
+            <p class="help-sub">Choose an option below to get support.</p>
+            <button class="help-option-btn">
+              <span class="help-icon">💬</span>
+              <div class="help-text"><strong>Chat with Support</strong><span>Speak with our support team</span></div>
+              <span class="help-arrow">›</span>
             </button>
-            <button class="dropdown-menu-item" data-target="blockSettings">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings
+            <button class="help-option-btn">
+              <span class="help-icon">✉️</span>
+              <div class="help-text"><strong>Email Support</strong><span>support@finaccrual.com</span></div>
+              <span class="help-arrow">›</span>
             </button>
-            <button class="dropdown-menu-item" data-target="blockPlan">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg> Plan Details
+            <button class="help-option-btn">
+              <span class="help-icon">ℹ️</span>
+              <div class="help-text"><strong>Visit Knowledge Base</strong><span>Browse articles and guides</span></div>
+              <span class="help-arrow">›</span>
             </button>
-            <button class="dropdown-menu-item" id="btnChangePlan">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg> Change Plan
-            </button>
-            <button class="dropdown-menu-item" data-target="blockHelp">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Need Help
-            </button>
-            <button class="dropdown-menu-item" data-target="blockInstructions">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg> Instructions
-            </button>
-            <div class="dropdown-divider"></div>
-            <button class="dropdown-menu-item text-red" id="btnDropdownLogout">
-              <svg class="icon-svg dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Logout
-            </button>
+            <button class="close-card-btn">Close</button>
           </div>
         </div>
 
-        <!-- Detail Block Cards Container -->
-        <div class="detail-blocks-container" id="detailBlocksContainer" style="display:none;">
-          
-          <!-- Account Block -->
-          <div class="detail-block-card" id="blockAccount" style="display:none;">
-            <div class="detail-block-header">
-              <h3>Account</h3>
-              <button class="close-block-btn">✕</button>
-            </div>
-            <div class="detail-block-body">
-              <div class="block-user-info">
-                <div class="dash-avatar-btn block-avatar" id="blockAvatar">A</div>
-                <div>
-                  <div class="block-user-name" id="blockUserName">Yana</div>
-                  <div class="block-user-email" id="blockUserEmail">yana.developer@gmail.com</div>
-                </div>
-              </div>
-              <div class="block-details-grid">
-                <span>Subscription ID</span><span class="val" id="blockSubId">FA-SUB-430154</span>
-                <span>Plan</span><span class="val green" id="blockPlanName">Starter Plan</span>
-                <span>Status</span><span class="val green">● Active</span>
-                <span>Member Since</span><span class="val" id="blockMemberDate">22 Jul 2025</span>
-              </div>
-              <button class="block-action-btn">👤 Manage Account <span>›</span></button>
-              <button class="block-logout-btn" id="btnBlockLogout">🚪 Logout</button>
-            </div>
+        <!-- Instructions Block -->
+        <div class="detail-block-card" id="blockInstructions" style="display:none;">
+          <div class="detail-block-header">
+            <h3>Instructions</h3>
+            <button class="close-block-btn">✕</button>
           </div>
-
-          <!-- Settings Block -->
-          <div class="detail-block-card" id="blockSettings" style="display:none;">
-            <div class="detail-block-header">
-              <h3>Settings</h3>
-              <button class="close-block-btn">✕</button>
+          <div class="detail-block-body">
+            <h4>How to Sync with QuickBooks / Xero</h4>
+            <ol class="instructions-list">
+              <li>Click on Connect for your preferred accounting software.</li>
+              <li>Authorize FinAccrual to access your data.</li>
+              <li>Map your accounts and configure settings.</li>
+              <li>Click Sync Now to start importing data into Excel.</li>
+            </ol>
+            <div class="instruction-tip">
+              💡 <strong>Tip:</strong> Make sure your data in Excel is clean and properly formatted for best results.
             </div>
-            <div class="detail-block-body">
-              <h4>General Settings</h4>
-              <div class="form-group">
-                <label>Default ERP</label>
-                <select class="block-select"><option>QuickBooks</option><option>Xero</option></select>
-              </div>
-              <div class="form-group">
-                <label>Sync Frequency</label>
-                <select class="block-select"><option>Daily</option><option>Weekly</option></select>
-              </div>
-              <h4>Data Options</h4>
-              <div class="toggle-row">
-                <span>Auto Sync on Open</span>
-                <label class="toggle-switch-sm"><input type="checkbox" checked><span class="toggle-slider-sm"></span></label>
-              </div>
-              <div class="toggle-row">
-                <span>Show Notifications</span>
-                <label class="toggle-switch-sm"><input type="checkbox" checked><span class="toggle-slider-sm"></span></label>
-              </div>
-              <button class="block-save-btn">Save Changes</button>
-            </div>
+            <button class="close-card-btn">Close</button>
           </div>
-
-          <!-- Plan Details Block -->
-          <div class="detail-block-card" id="blockPlan" style="display:none;">
-            <div class="detail-block-header">
-              <h3>Plan Details</h3>
-              <button class="close-block-btn">✕</button>
-            </div>
-            <div class="detail-block-body">
-              <div class="plan-overview">
-                <div class="plan-icon-lg">👑</div>
-                <div>
-                  <div class="plan-title" id="blockPlanTitle">Starter Plan</div>
-                  <div class="plan-status">● Active</div>
-                </div>
-              </div>
-              <div class="block-details-grid">
-                <span>Plan Type</span><span class="val" id="blockPlanType">Starter Plan</span>
-                <span>Status</span><span class="val green">● Active</span>
-                <span>Billing Amount</span><span class="val" id="blockBillingAmount">$29 / month</span>
-                <span>Valid Until</span><span class="val" id="blockValidUntil">22 Aug 2026</span>
-              </div>
-              <p class="plan-footer-note">Your plan is active. Enjoy all starter plan features.</p>
-            </div>
-          </div>
-
-          <!-- Need Help Block -->
-          <div class="detail-block-card" id="blockHelp" style="display:none;">
-            <div class="detail-block-header">
-              <h3>Need Help</h3>
-              <button class="close-block-btn">✕</button>
-            </div>
-            <div class="detail-block-body">
-              <h4>We're here to help!</h4>
-              <p class="help-sub">Choose an option below to get support.</p>
-              <button class="help-option-btn">
-                <span class="help-icon">💬</span>
-                <div class="help-text"><strong>Chat with Support</strong><span>Speak with our support team</span></div>
-                <span class="help-arrow">›</span>
-              </button>
-              <button class="help-option-btn">
-                <span class="help-icon">✉️</span>
-                <div class="help-text"><strong>Email Support</strong><span>support@finaccrual.com</span></div>
-                <span class="help-arrow">›</span>
-              </button>
-              <button class="help-option-btn">
-                <span class="help-icon">ℹ️</span>
-                <div class="help-text"><strong>Visit Knowledge Base</strong><span>Browse articles and guides</span></div>
-                <span class="help-arrow">›</span>
-              </button>
-              <button class="close-card-btn">Close</button>
-            </div>
-          </div>
-
-          <!-- Instructions Block -->
-          <div class="detail-block-card" id="blockInstructions" style="display:none;">
-            <div class="detail-block-header">
-              <h3>Instructions</h3>
-              <button class="close-block-btn">✕</button>
-            </div>
-            <div class="detail-block-body">
-              <h4>How to Sync with QuickBooks / Xero</h4>
-              <ol class="instructions-list">
-                <li>Click on Connect for your preferred accounting software.</li>
-                <li>Authorize FinAccrual to access your data.</li>
-                <li>Map your accounts and configure settings.</li>
-                <li>Click Sync Now to start importing data into Excel.</li>
-              </ol>
-              <div class="instruction-tip">
-                💡 <strong>Tip:</strong> Make sure your data in Excel is clean and properly formatted for best results.
-              </div>
-              <button class="close-card-btn">Close</button>
-            </div>
-          </div>
-
         </div>
-        <!-- /detailBlocksContainer -->
+
       </div>
-      <!-- /viewDashboard -->
+      <!-- /detailBlocksContainer -->
+    </div>
+    <!-- /viewDashboard -->
 
-      <!-- ============================================================
+    <!-- ============================================================
            VIEW: ERROR
            ============================================================ -->
-      <div id="viewError" class="view">
-        <div class="error-screen">
-          <div class="error-icon">⚠️</div>
-          <h2 class="error-title">Something went wrong</h2>
-          <p class="error-msg" id="errorMessage">An unexpected error occurred.</p>
-          <button class="error-retry-btn" id="btnRetry">Try Again</button>
-        </div>
+    <div id="viewError" class="view">
+      <div class="error-screen">
+        <div class="error-icon">⚠️</div>
+        <h2 class="error-title">Something went wrong</h2>
+        <p class="error-msg" id="errorMessage">An unexpected error occurred.</p>
+        <button class="error-retry-btn" id="btnRetry">Try Again</button>
       </div>
-
     </div>
-    <!-- /app -->
-  </body>
+
+  </div>
+  <!-- /app -->
+
+    <!-- ============================================================
+         TRIAL EXPIRED MODAL
+         ============================================================ -->
+    <div class="fa-modal-overlay" id="trialExpiredModal" style="display:none; align-items: center; justify-content: center; z-index: 10000;">
+      <div class="fa-modal" style="max-width: 400px; text-align: center; padding: 24px; border-radius: 12px; background: white; box-shadow: 0 10px 25px rgba(0,0,0,0.1); position: relative;">
+        <button class="fa-modal-close" id="btnCloseTrialExpired" style="position:absolute; right:16px; top:16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #6b7a9a;">×</button>
+        <div class="trial-expired-icon" style="margin-bottom: 16px;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="width: 140px; height: auto; margin: 0 auto;"><circle cx="50" cy="50" r="40" fill="#f3f4f6"/><rect x="35" y="30" width="30" height="40" rx="4" fill="#e2e8f0"/><circle cx="60" cy="65" r="20" fill="#8b5cf6"/><path d="M60 55v10l8 5" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="65" cy="25" r="10" fill="#f59e0b"/><path d="M65 20v5m0 3v1" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><circle cx=\'50\' cy=\'50\' r=\'40\' fill=\'%23f3f4f6\'/><rect x=\'35\' y=\'30\' width=\'30\' height=\'40\' rx=\'4\' fill=\'%23e2e8f0\'/><circle cx=\'60\' cy=\'65\' r=\'20\' fill=\'%238b5cf6\'/><path d=\'M60 55v10l8 5\' stroke=\'white\' stroke-width=\'3\' fill=\'none\' stroke-linecap=\'round\'/><circle cx=\'65\' cy=\'25\' r=\'10\' fill=\'%23f59e0b\'/><path d=\'M65 20v5m0 3v1\' stroke=\'white\' stroke-width=\'2\' stroke-linecap=\'round\'/></svg>'"/>
+        </div>
+        <h2 style="margin: 0 0 12px; font-size: 22px; font-weight: 700; color: #172b56; font-family: inherit;">Free Trial Completed!</h2>
+        <p style="color: #64748b; font-size: 14px; margin-bottom: 24px; line-height: 1.5; font-family: inherit;">
+          Your free trial has ended. Upgrade your plan<br/>to continue using <strong>FinAccrual</strong> and unlock all features.
+        </p>
+        <button id="btnUpgradeNow" class="fa-btn-primary" style="width: 100%; padding: 12px; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; background-color: #6300ff; color: white; border: none; border-radius: 8px; cursor: pointer; font-family: inherit;">
+          <span style="color: #fcd34d;">👑</span> Upgrade Now
+        </button>
+        <p style="color: #94a3b8; font-size: 12px; margin-top: 12px; margin-bottom: 0; font-family: inherit;">Choose the plan that's right for you.</p>
+      </div>
+    </div>
+</body>
+
 </html>

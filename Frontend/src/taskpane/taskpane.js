@@ -33,33 +33,33 @@ Office.onReady(() => {
     // ============================================================
     const AppState = {
         // Auth / Subscription
-        userEmail:        localStorage.getItem("fa_user_email")  || null,
-        userName:         localStorage.getItem("fa_user_name")   || null,
-        userProvider:     localStorage.getItem("fa_user_provider") || null,
-        hasSubscription:  localStorage.getItem("fa_has_subscription") === "true",
-        subscriptionId:   localStorage.getItem("fa_subscription_id")   || null,
+        userEmail: localStorage.getItem("fa_user_email") || null,
+        userName: localStorage.getItem("fa_user_name") || null,
+        userProvider: localStorage.getItem("fa_user_provider") || null,
+        hasSubscription: localStorage.getItem("fa_has_subscription") === "true",
+        subscriptionId: localStorage.getItem("fa_subscription_id") || null,
         subscriptionPlan: (v => (!v || v === 'null' || v === 'undefined') ? null : v)(localStorage.getItem("fa_subscription_plan")),
 
         // Pending checkout details (set when user selects a plan)
-        pendingPlan:      null,
-        pendingPrice:     null,
-        pendingCycle:     null,
+        pendingPlan: null,
+        pendingPrice: null,
+        pendingCycle: null,
 
         // ERP Connection
-        erpConnected:     localStorage.getItem("fa_erp_connected") === "true",
-        erpType:          localStorage.getItem("fa_erp_type") || null,        // "quickbooks" | "xero"
-        erpOrgName:       localStorage.getItem("fa_erp_org")  || null,
+        erpConnected: localStorage.getItem("fa_erp_connected") === "true",
+        erpType: localStorage.getItem("fa_erp_type") || null,        // "quickbooks" | "xero"
+        erpOrgName: localStorage.getItem("fa_erp_org") || null,
         erpConnectedDate: localStorage.getItem("fa_erp_date") || null,
-        forceWelcome:     false,
+        forceWelcome: false,
 
         // JWT token — persisted across sessions
-        jwtToken:         localStorage.getItem("fa_jwt_token") || null,
+        jwtToken: localStorage.getItem("fa_jwt_token") || null,
 
         // Set true the moment the backend reports ERR_SESSION_EXPIRED.
         // While true, ApiService.apiFetch refuses to make further requests
         // (avoids hammering the backend with a storm of repeated 401s)
         // until a fresh token is obtained via login.
-        sessionExpired:   false,
+        sessionExpired: false,
 
         // ERP Operations
         currentProvider: "quickbooks",
@@ -69,8 +69,8 @@ Office.onReady(() => {
             if (plan.includes("standard")) return "standard";
             return "pro";
         },
-        connectionId:    null,
-        isConnected:     false
+        connectionId: null,
+        isConnected: false
     };
 
     // ============================================================
@@ -550,34 +550,22 @@ Office.onReady(() => {
          * keeps working, but the user now sees *why*.
          */
         async checkSubscription(email) {
-            let res;
             try {
-                res = await fetch(`${this.BASE}/api/auth/login`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email })
-                });
-            } catch (networkErr) {
-                const apiErr = networkError(networkErr);
-                this.handleGlobalApiError(apiErr, { retry: () => this.checkSubscription(email) });
+                const res = await this.apiFetch(`/api/auth/me`);
+                const result = await res.json();
+                hideBanner();
+                const user = result.user || {};
+                return {
+                    hasSubscription: !!user.plan,
+                    plan: user.plan,
+                    subscriptionId: user.subscriptionId,
+                    user: user,
+                    success: true
+                };
+            } catch (err) {
+                // Return fallback state if network error or session expired
                 return { hasSubscription: AppState.hasSubscription };
             }
-
-            if (!res.ok) {
-                const apiErr = await parseApiError(res.clone());
-                this.handleGlobalApiError(apiErr);
-                return { hasSubscription: false };
-            }
-
-            const result = await res.json();
-            // Persist the token if the backend returned one
-            if (result.token) {
-                AppState.jwtToken = result.token;
-                AppState.sessionExpired = false; // fresh token — lift the request block
-                localStorage.setItem("fa_jwt_token", result.token);
-            }
-            hideBanner();
-            return result;
         },
 
         /** Checks ERP token validity from backend (JWT required). */
@@ -609,8 +597,8 @@ Office.onReady(() => {
         async fetchMasterData(provider, companyId) {
             const params = new URLSearchParams({
                 companyId: companyId || "",
-                platform:  provider || "",
-                tier:      AppState.currentTier || ""
+                platform: provider || "",
+                tier: AppState.currentTier || ""
             });
             const res = await this.apiFetch(`/api/pull-master-data?${params.toString()}`, {
                 method: "GET"
@@ -727,7 +715,7 @@ Office.onReady(() => {
 
                 const getOrCreateGroup = (id, name) => {
                     const cleanName = (name && name !== "Default" && name !== "Default Organization") ? name : fallbackOrgName;
-                    const key       = cleanName.trim();
+                    const key = cleanName.trim();
 
                     if (!orgGroupsMap.has(key)) {
                         orgGroupsMap.set(key, {
@@ -817,9 +805,9 @@ Office.onReady(() => {
                 for (const [key, group] of orgGroupsMap) {
                     const orgName = group.name; // Client ID and Client Name are identical
 
-                    const accCount    = group.accounts.length;
-                    const classCount  = group.classes.length;
-                    const locCount    = group.locations.length;
+                    const accCount = group.accounts.length;
+                    const classCount = group.classes.length;
+                    const locCount = group.locations.length;
                     const entityCount = group.entities.length;
 
                     const maxRows = Math.max(1, accCount, classCount, locCount, entityCount);
@@ -910,7 +898,7 @@ Office.onReady(() => {
         async clearMasterData() {
             await Excel.run(async (context) => {
                 const masterSheet = context.workbook.worksheets.getItemOrNullObject("1.Master_Data");
-                const inputSheet  = context.workbook.worksheets.getItemOrNullObject("2.Input");
+                const inputSheet = context.workbook.worksheets.getItemOrNullObject("2.Input");
                 const sheets = context.workbook.worksheets;
                 sheets.load("items/name");
                 await context.sync();
@@ -928,7 +916,7 @@ Office.onReady(() => {
                     context.workbook.worksheets.add("Sheet1").activate();
                 }
                 if (!masterSheet.isNullObject) masterSheet.delete();
-                if (!inputSheet.isNullObject)  inputSheet.delete();
+                if (!inputSheet.isNullObject) inputSheet.delete();
                 await context.sync();
             });
         },
@@ -951,11 +939,11 @@ Office.onReady(() => {
         async setupWorkbookSheets(provider) {
             await Excel.run(async (context) => {
                 let masterSheet = context.workbook.worksheets.getItemOrNullObject("1.Master_Data");
-                let inputSheet  = context.workbook.worksheets.getItemOrNullObject("2.Input");
+                let inputSheet = context.workbook.worksheets.getItemOrNullObject("2.Input");
                 await context.sync();
 
                 if (masterSheet.isNullObject) masterSheet = context.workbook.worksheets.add("1.Master_Data");
-                if (inputSheet.isNullObject)  inputSheet  = context.workbook.worksheets.add("2.Input");
+                if (inputSheet.isNullObject) inputSheet = context.workbook.worksheets.add("2.Input");
 
                 masterSheet.activate();
                 await context.sync();
@@ -966,17 +954,17 @@ Office.onReady(() => {
                 const headerRange = masterSheet.getRange("A1:AB1");
                 const headers = [
                     [
-                        "Client ID", "Client Name", "", 
-                        "Client ID", "Account Code", "Account Name", "Account Type", "Account Sub-Type", "Classification", "Fully Qualified Name", "Status", `${idLabel} Account Id`, "", 
-                        "Client ID", "Class Name", `${idLabel} Class Id`, "Status", "", 
-                        "Client ID", "Location Name", `${idLabel} Location Id`, "Status", "", 
+                        "Client ID", "Client Name", "",
+                        "Client ID", "Account Code", "Account Name", "Account Type", "Account Sub-Type", "Classification", "Fully Qualified Name", "Status", `${idLabel} Account Id`, "",
+                        "Client ID", "Class Name", `${idLabel} Class Id`, "Status", "",
+                        "Client ID", "Location Name", `${idLabel} Location Id`, "Status", "",
                         "Client ID", "Entity Name", "Entity Type", `${idLabel} Entity Id`, "Status"
                     ]
                 ];
 
                 headerRange.clear();
                 headerRange.values = headers;
-                
+
                 // Format Navy Blue Section 1 Header Range (A1:B1)
                 const purpleRange1 = masterSheet.getRange("A1:B1");
                 purpleRange1.format.fill.color = "#1B224C";
@@ -1026,13 +1014,13 @@ Office.onReady(() => {
                 headerRange.format.rowHeight = 28;
                 headerRange.format.font.size = 11;
                 headerRange.format.wrapText = true;
-                
+
                 // Set all columns in the range to column width 115
                 masterSheet.getRange("A:AB").format.columnWidth = 115;
-                
+
                 masterSheet.freezePanes.unfreeze();
                 masterSheet.getRange("A2").select();
-                
+
                 await context.sync();
             });
         }
@@ -1052,11 +1040,11 @@ Office.onReady(() => {
          * @param {string} plan
          */
         handleNewUserAuthed(email, name, provider, subscriptionId, plan, token) {
-            AppState.userEmail        = email;
-            AppState.userName         = name;
-            AppState.userProvider     = provider;
-            AppState.hasSubscription  = true;
-            AppState.subscriptionId   = subscriptionId;
+            AppState.userEmail = email;
+            AppState.userName = name;
+            AppState.userProvider = provider;
+            AppState.hasSubscription = true;
+            AppState.subscriptionId = subscriptionId;
             AppState.subscriptionPlan = plan;
 
             // Persist the JWT token so all subsequent API calls are authenticated
@@ -1066,9 +1054,9 @@ Office.onReady(() => {
                 localStorage.setItem("fa_jwt_token", token);
             }
 
-            localStorage.setItem("fa_user_email",      email);
-            localStorage.setItem("fa_user_name",       name);
-            localStorage.setItem("fa_user_provider",   provider);
+            localStorage.setItem("fa_user_email", email);
+            localStorage.setItem("fa_user_name", name);
+            localStorage.setItem("fa_user_provider", provider);
             this._persistSubscription();
 
             DashboardService.render();
@@ -1084,11 +1072,11 @@ Office.onReady(() => {
          * @param {string} provider
          */
         async handleReturningUser(email, name, provider, token) {
-            AppState.userEmail    = email;
-            AppState.userName     = name;
+            AppState.userEmail = email;
+            AppState.userName = name;
             AppState.userProvider = provider;
-            localStorage.setItem("fa_user_email",    email);
-            localStorage.setItem("fa_user_name",     name);
+            localStorage.setItem("fa_user_email", email);
+            localStorage.setItem("fa_user_name", name);
             localStorage.setItem("fa_user_provider", provider);
 
             // Persist token from popup if provided (avoids a round-trip)
@@ -1103,19 +1091,19 @@ Office.onReady(() => {
                 const result = await ApiService.checkSubscription(email);
                 const userPlan = result.plan || (result.user && result.user.plan);
                 if (result.hasSubscription || userPlan) {
-                    AppState.hasSubscription  = true;
-                    AppState.subscriptionId   = result.subscriptionId || AppState.subscriptionId;
-                    AppState.subscriptionPlan = userPlan              || AppState.subscriptionPlan;
+                    AppState.hasSubscription = true;
+                    AppState.subscriptionId = result.subscriptionId || AppState.subscriptionId;
+                    AppState.subscriptionPlan = userPlan || AppState.subscriptionPlan;
                     this._persistSubscription();
                     DashboardService.render();
                     ViewRouter.show("Dashboard");
                     DashboardService.showStatus("Login successful.", "success");
                 } else {
-                    // Plan is null or missing — show subscription page
-                    ViewRouter.show("Plans");
+                    // Plan is null or missing — show trial vs subscribe popup
+                    AppController.openTrialSelectDialog();
                 }
             } catch {
-                ViewRouter.show("Plans");
+                AppController.openTrialSelectDialog();
                 DashboardService.showStatus("Login failed. Please try again.", "error");
             }
         },
@@ -1134,7 +1122,7 @@ Office.onReady(() => {
                 if (!event.data) return;
                 let data = event.data;
                 if (typeof data === "string") {
-                    try { data = JSON.parse(data); } catch (_) {}
+                    try { data = JSON.parse(data); } catch (_) { }
                 }
 
                 if (!data || !data.type) return;
@@ -1144,18 +1132,18 @@ Office.onReady(() => {
                     window.removeEventListener("message", msgHandler);
                     AuthService.handleNewUserAuthed(
                         data.email || "",
-                        data.name  || data.email || "",
+                        data.name || data.email || "",
                         "google",
                         data.subscriptionId || "",
-                        data.plan           || "Starter",
-                        data.token          || ""
+                        data.plan || "Starter",
+                        data.token || ""
                     );
                 } else if (data.type === "google_profile") {
                     // Returning user — popup closed immediately, check backend
                     window.removeEventListener("message", msgHandler);
                     AuthService.handleReturningUser(
                         data.email || "",
-                        data.name  || data.email || "",
+                        data.name || data.email || "",
                         "google",
                         data.token || ""
                     );
@@ -1193,7 +1181,7 @@ Office.onReady(() => {
                 if (!event.data) return;
                 let data = event.data;
                 if (typeof data === "string") {
-                    try { data = JSON.parse(data); } catch (_) {}
+                    try { data = JSON.parse(data); } catch (_) { }
                 }
                 if (!data || !data.type) return;
 
@@ -1201,17 +1189,17 @@ Office.onReady(() => {
                     window.removeEventListener("message", msgHandler);
                     AuthService.handleNewUserAuthed(
                         data.email || "",
-                        data.name  || data.email || "",
+                        data.name || data.email || "",
                         "microsoft",
                         data.subscriptionId || "",
-                        data.plan           || "Starter",
-                        data.token          || ""
+                        data.plan || "Starter",
+                        data.token || ""
                     );
                 } else if (data.type === "ms_profile" || data.type === "microsoft_profile") {
                     window.removeEventListener("message", msgHandler);
                     AuthService.handleReturningUser(
                         data.email || "",
-                        data.name  || data.email || "",
+                        data.name || data.email || "",
                         "microsoft",
                         data.token || ""
                     );
@@ -1238,8 +1226,8 @@ Office.onReady(() => {
         },
 
         _persistSubscription() {
-            localStorage.setItem("fa_has_subscription",  String(AppState.hasSubscription));
-            localStorage.setItem("fa_subscription_id",   AppState.subscriptionId   || "");
+            localStorage.setItem("fa_has_subscription", String(AppState.hasSubscription));
+            localStorage.setItem("fa_subscription_id", AppState.subscriptionId || "");
             const _planToSave = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null' && AppState.subscriptionPlan !== 'undefined') ? AppState.subscriptionPlan : "";
             localStorage.setItem("fa_subscription_plan", _planToSave);
         },
@@ -1249,17 +1237,17 @@ Office.onReady(() => {
          */
         logout() {
             ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data on logout: ", err));
-            AppState.userEmail        = null;
-            AppState.userName         = null;
-            AppState.userProvider     = null;
-            AppState.hasSubscription  = false;
-            AppState.subscriptionId   = null;
+            AppState.userEmail = null;
+            AppState.userName = null;
+            AppState.userProvider = null;
+            AppState.hasSubscription = false;
+            AppState.subscriptionId = null;
             AppState.subscriptionPlan = null;
-            AppState.erpConnected     = false;
-            AppState.erpType          = null;
-            AppState.erpOrgName       = null;
+            AppState.erpConnected = false;
+            AppState.erpType = null;
+            AppState.erpOrgName = null;
             AppState.erpConnectedDate = null;
-            AppState.jwtToken         = null;  // Clear the JWT token on logout
+            AppState.jwtToken = null;  // Clear the JWT token on logout
             // Note: AppState.sessionExpired is deliberately NOT reset here —
             // it's only cleared once a fresh token is obtained via a
             // successful login (see checkSubscription / handleGoogleAuth /
@@ -1277,8 +1265,8 @@ Office.onReady(() => {
             ].forEach(k => localStorage.removeItem(k));
 
             try {
-                ApiService.apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-            } catch (_) {}
+                ApiService.apiFetch("/api/auth/logout", { method: "POST" }).catch(() => { });
+            } catch (_) { }
 
             ViewRouter.show("Welcome");
         }
@@ -1293,23 +1281,23 @@ Office.onReady(() => {
          * In production: replace mock URL with Stripe/Razorpay checkout session URL.
          */
         openCheckout(plan, price, cycle) {
-            AppState.pendingPlan  = plan;
+            AppState.pendingPlan = plan;
             AppState.pendingPrice = price;
             AppState.pendingCycle = cycle;
 
-            const tokenParam  = AppState.jwtToken ? `&token=${encodeURIComponent(AppState.jwtToken)}` : "";
+            const tokenParam = AppState.jwtToken ? `&token=${encodeURIComponent(AppState.jwtToken)}` : "";
             const checkoutUrl = `${ApiService.BASE}/api/payments/checkout?plan=${encodeURIComponent(plan)}&price=${price}&cycle=${encodeURIComponent(cycle)}&email=${encodeURIComponent(AppState.userEmail || "")}${tokenParam}`;
 
-            const btnText    = document.getElementById("checkoutBtnText");
+            const btnText = document.getElementById("checkoutBtnText");
             const btnSpinner = document.getElementById("checkoutSpinner");
-            if (btnText)    btnText.textContent = "Opening Secure Checkout...";
+            if (btnText) btnText.textContent = "Opening Secure Checkout...";
             if (btnSpinner) btnSpinner.classList.remove("hidden");
 
             const msgHandler = (event) => {
                 if (!event.data) return;
                 let data = event.data;
                 if (typeof data === "string") {
-                    try { data = JSON.parse(data); } catch (_) {}
+                    try { data = JSON.parse(data); } catch (_) { }
                 }
                 if (data && (data.type === "payment_success" || data.type === "checkout_complete")) {
                     window.removeEventListener("message", msgHandler);
@@ -1323,7 +1311,7 @@ Office.onReady(() => {
                 "width=540,height=700,top=60,left=80,toolbar=no,menubar=no"
             );
 
-            if (btnText)    btnText.textContent = "Open Secure Checkout";
+            if (btnText) btnText.textContent = "Open Secure Checkout";
             if (btnSpinner) btnSpinner.classList.add("hidden");
 
             if (!popup || popup.closed) {
@@ -1340,18 +1328,18 @@ Office.onReady(() => {
          */
         handlePaymentSuccess(data) {
             const subId = data.subscriptionId || ("FA-SUB-" + Math.floor(100000 + Math.random() * 900000));
-            const plan  = data.plan           || AppState.pendingPlan  || "Professional";
+            const plan = data.plan || AppState.pendingPlan || "Professional";
 
-            AppState.hasSubscription  = true;
-            AppState.subscriptionId   = subId;
+            AppState.hasSubscription = true;
+            AppState.subscriptionId = subId;
             AppState.subscriptionPlan = plan;
             AuthService._persistSubscription();
 
             // Show success screen
-            const idEl   = document.getElementById("successSubId");
+            const idEl = document.getElementById("successSubId");
             const planEl = document.getElementById("successPlanName");
-            if (idEl)   idEl.textContent   = subId;
-            if (planEl) planEl.textContent  = plan;
+            if (idEl) idEl.textContent = subId;
+            if (planEl) planEl.textContent = plan;
 
             ViewRouter.show("Success");
             DashboardService.showStatus("Payment successful.", "success", `Subscribed to the ${plan} plan.`);
@@ -1364,17 +1352,17 @@ Office.onReady(() => {
         async verifyPayment() {
             ViewRouter.show("Loading");
             try {
-                const res    = await ApiService.checkSubscription(AppState.userEmail);
+                const res = await ApiService.checkSubscription(AppState.userEmail);
                 if (res.hasSubscription) {
-                    AppState.hasSubscription  = true;
-                    AppState.subscriptionId   = res.subscriptionId || AppState.subscriptionId;
-                    AppState.subscriptionPlan = res.plan           || AppState.pendingPlan;
+                    AppState.hasSubscription = true;
+                    AppState.subscriptionId = res.subscriptionId || AppState.subscriptionId;
+                    AppState.subscriptionPlan = res.plan || AppState.pendingPlan;
                     AuthService._persistSubscription();
 
-                    const idEl   = document.getElementById("successSubId");
+                    const idEl = document.getElementById("successSubId");
                     const planEl = document.getElementById("successPlanName");
-                    if (idEl)   idEl.textContent   = AppState.subscriptionId;
-                    if (planEl) planEl.textContent  = AppState.subscriptionPlan;
+                    if (idEl) idEl.textContent = AppState.subscriptionId;
+                    if (planEl) planEl.textContent = AppState.subscriptionPlan;
                     ViewRouter.show("Success");
                     DashboardService.showStatus("Payment successful.", "success", `Subscribed to the ${AppState.subscriptionPlan} plan.`);
                 } else {
@@ -1399,7 +1387,7 @@ Office.onReady(() => {
          * Renders and populates all dashboard UI elements based on AppState.
          */
         render() {
-            const name  = AppState.userName  || AppState.userEmail || "User";
+            const name = AppState.userName || AppState.userEmail || "User";
             const first = name.split(" ")[0];
             const initial = name.charAt(0).toUpperCase();
 
@@ -1412,19 +1400,19 @@ Office.onReady(() => {
 
             // Render details in disconnected state header
             const welcomeEl = document.getElementById("dashWelcome");
-            const badgeEl   = document.getElementById("dashPlanBadge");
-            const subIdEl   = document.getElementById("dashSubId");
+            const badgeEl = document.getElementById("dashPlanBadge");
+            const subIdEl = document.getElementById("dashSubId");
 
             if (welcomeEl) welcomeEl.textContent = `Welcome, ${first}!`;
-            if (badgeEl)   badgeEl.textContent = ((AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null' ? AppState.subscriptionPlan : "Basic") + " Plan");
-            if (subIdEl)   subIdEl.textContent = AppState.subscriptionId || "—";
-            
+            if (badgeEl) badgeEl.textContent = ((AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null' ? AppState.subscriptionPlan : "Basic") + " Plan");
+            if (subIdEl) subIdEl.textContent = AppState.subscriptionId || "—";
+
             // Render details in dropdown and blocks
             if (document.getElementById("dropdownUserName")) document.getElementById("dropdownUserName").textContent = name;
             if (document.getElementById("dropdownUserEmail")) document.getElementById("dropdownUserEmail").textContent = AppState.userEmail;
             if (document.getElementById("blockUserName")) document.getElementById("blockUserName").textContent = name;
             if (document.getElementById("blockUserEmail")) document.getElementById("blockUserEmail").textContent = AppState.userEmail;
-            
+
             if (document.getElementById("blockSubId")) document.getElementById("blockSubId").textContent = AppState.subscriptionId || "—";
             const _safePlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
             if (document.getElementById("blockPlanName")) document.getElementById("blockPlanName").textContent = _safePlan + " Plan";
@@ -1448,7 +1436,7 @@ Office.onReady(() => {
          */
         showProviderSelected(provider) {
             AppState.currentProvider = provider;
-            const isQB  = provider === "quickbooks";
+            const isQB = provider === "quickbooks";
             const pName = isQB ? "QuickBooks" : "Xero";
 
             // Hide disconnected + connected, show provider-selected
@@ -1550,12 +1538,12 @@ Office.onReady(() => {
                         if (connectingSection) connectingSection.style.display = "none";
 
                         // Update QB card button label
-                        const hasQB   = (conns || []).some(c => (c.platform || "").toLowerCase() === "quickbooks");
+                        const hasQB = (conns || []).some(c => (c.platform || "").toLowerCase() === "quickbooks");
                         const hasXero = (conns || []).some(c => (c.platform || "").toLowerCase() === "xero");
-                        const qbBtn   = document.querySelector("#btnConnectQB .btn-connect-full");
+                        const qbBtn = document.querySelector("#btnConnectQB .btn-connect-full");
                         const xeroBtn = document.querySelector("#btnConnectXero .btn-connect-full");
-                        if (qbBtn)   qbBtn.innerHTML   = hasQB   ? "▶ Open QuickBooks Dashboard →" : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect QuickBooks →`;
-                        if (xeroBtn) xeroBtn.innerHTML = hasXero ? "▶ Open Xero Dashboard →"       : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect Xero →`;
+                        if (qbBtn) qbBtn.innerHTML = hasQB ? "▶ Open QuickBooks Dashboard →" : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect QuickBooks →`;
+                        if (xeroBtn) xeroBtn.innerHTML = hasXero ? "▶ Open Xero Dashboard →" : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg> Connect Xero →`;
 
                         // No active provider anymore — recompute the badge/drawer,
                         // log console, and step indicators so nothing left over
@@ -1612,7 +1600,7 @@ Office.onReady(() => {
                         const currentPlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
                         const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
                         const xeroConns = conns.filter(c => (c.platform || "").toLowerCase() === "xero");
-                        
+
                         let xeroSelected = new Set(xeroConns.filter(c => c.status !== 'Disconnected').map(c => c.companyId));
 
                         const listEl = document.getElementById("xeroCompanyList");
@@ -1768,7 +1756,7 @@ Office.onReady(() => {
                             const item = document.createElement("div");
                             item.className = `fa-company-item ${isActive ? "active-company" : ""} ${isDisconnected ? "disconnected-company" : ""}`;
                             item.dataset.companyId = c.companyId;
-                            
+
                             let badgeOrBtn = "";
                             if (isActive && !isDisconnected) {
                                 badgeOrBtn = '<span class="fa-badge-active">ACTIVE</span>';
@@ -1824,7 +1812,7 @@ Office.onReady(() => {
                     // Populate Subscription Stats (filtered by current active platform: quickbooks or xero)
                     const currentPlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
                     const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
-                    
+
                     const connectedCount = platformConns.length;
                     const remaining = Math.max(0, maxAllowed - connectedCount);
 
@@ -1859,10 +1847,10 @@ Office.onReady(() => {
                     if (disconnectBtn) disconnectBtn.textContent = `Disconnect ${platformDisplayName}`;
 
                     // Show console for correct provider
-                    const qbConsole   = document.getElementById("qbConsole");
+                    const qbConsole = document.getElementById("qbConsole");
                     const xeroConsole = document.getElementById("xeroConsole");
-                    if (qbConsole)   qbConsole.style.display   = isQB ? "flex" : "none";
-                    if (xeroConsole) xeroConsole.style.display  = isQB ? "none" : "flex";
+                    if (qbConsole) qbConsole.style.display = isQB ? "flex" : "none";
+                    if (xeroConsole) xeroConsole.style.display = isQB ? "none" : "flex";
 
                     // The active provider/company may have just changed
                     // (switch/resume/connect) — recompute the badge/drawer,
@@ -1975,7 +1963,7 @@ Office.onReady(() => {
                         if (AppState.currentCompanyId === company.companyId) {
                             AppState.currentCompanyId = null;
                         }
-                        try { await ExcelService.clearMasterData(); } catch (_) {}
+                        try { await ExcelService.clearMasterData(); } catch (_) { }
                         this.showStatus("Company disconnected.", "success", null, companyPlatform);
                         this.renderERPSection();
                     } catch (_) {
@@ -2091,8 +2079,8 @@ Office.onReady(() => {
             const line = document.createElement("div");
             line.className = "log-line";
             if (message.toLowerCase().includes("error")) {
-        line.style.color = "#ef4444"; // Red color for errors
-    }
+                line.style.color = "#ef4444"; // Red color for errors
+            }
             const timeLabel = new Date(timestampIso).toLocaleTimeString();
             line.textContent = `[${timeLabel}] ${message}`;
             log.appendChild(line);
@@ -2227,11 +2215,11 @@ Office.onReady(() => {
 
             [
                 [isQB ? "stepConnect" : "xeroStepConnect", connectDone],
-                [isQB ? "stepSetup"   : "xeroStepSetup",   !!state.setup],
-                [isQB ? "stepPull"    : "xeroStepPull",    !!state.pull],
+                [isQB ? "stepSetup" : "xeroStepSetup", !!state.setup],
+                [isQB ? "stepPull" : "xeroStepPull", !!state.pull],
                 ["provStepConnect", connectDone],
-                ["provStepSetup",   !!state.setup],
-                ["provStepPull",    !!state.pull]
+                ["provStepSetup", !!state.setup],
+                ["provStepPull", !!state.pull]
             ].forEach(([id, done]) => {
                 document.getElementById(id)?.classList.toggle("complete", done);
             });
@@ -2265,8 +2253,8 @@ Office.onReady(() => {
         },
 
         resetSteps() {
-            ["stepConnect","stepSetup","stepPull","xeroStepConnect","xeroStepSetup","xeroStepPull",
-             "provStepConnect","provStepSetup","provStepPull"]
+            ["stepConnect", "stepSetup", "stepPull", "xeroStepConnect", "xeroStepSetup", "xeroStepPull",
+                "provStepConnect", "provStepSetup", "provStepPull"]
                 .forEach(id => document.getElementById(id)?.classList.remove("complete", "active"));
         },
 
@@ -2291,10 +2279,10 @@ Office.onReady(() => {
         launchERPOAuth(provider) {
             this.showConnecting(provider);
             AppState.currentProvider = provider;
-            const isQB  = provider === "quickbooks";
+            const isQB = provider === "quickbooks";
             const pName = isQB ? "QuickBooks" : "Xero";
             const encodedMail = encodeURIComponent(AppState.userEmail || "");
-            const tokenParam  = AppState.jwtToken ? `&token=${encodeURIComponent(AppState.jwtToken)}` : "";
+            const tokenParam = AppState.jwtToken ? `&token=${encodeURIComponent(AppState.jwtToken)}` : "";
             const connectUrl = isQB
                 ? `${ApiService.BASE}/api/quickbooks/connect/?tier=${AppState.currentTier}&mail=${encodedMail}${tokenParam}`
                 : `${ApiService.BASE}/api/xero/connect?tier=${AppState.currentTier}&mail=${encodedMail}${tokenParam}`;
@@ -2412,16 +2400,16 @@ Office.onReady(() => {
          */
         onERPConnected(provider) {
             const isQB = provider === "quickbooks";
-            const now  = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+            const now = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
 
-            AppState.erpConnected     = true;
-            AppState.erpType          = provider;
+            AppState.erpConnected = true;
+            AppState.erpType = provider;
             AppState.erpConnectedDate = now;
-            AppState.currentProvider  = provider;
+            AppState.currentProvider = provider;
 
             localStorage.setItem("fa_erp_connected", "true");
-            localStorage.setItem("fa_erp_type",      provider);
-            localStorage.setItem("fa_erp_date",      now);
+            localStorage.setItem("fa_erp_type", provider);
+            localStorage.setItem("fa_erp_date", now);
 
             // Attempt to fetch org name from backend. Uses apiFetch (not raw
             // fetch) so the JWT is actually attached — this endpoint is
@@ -2436,7 +2424,7 @@ Office.onReady(() => {
                     const realmId = tokens[0]?.realm_id || tokens[0]?.tenant_name || null;
                     // Use backend realm_id if available, else generate a random 16-digit ID
                     const connId = realmId || DashboardService._generateConnectionId();
-                    AppState.erpOrgName   = connId;
+                    AppState.erpOrgName = connId;
                     AppState.connectionId = connId;
                     localStorage.setItem("fa_erp_org", connId);
                     DashboardService._finalizeConnection(provider, connId);
@@ -2444,7 +2432,7 @@ Office.onReady(() => {
                 .catch(() => {
                     // Backend not available — generate a random connection ID
                     const connId = DashboardService._generateConnectionId();
-                    AppState.erpOrgName   = connId;
+                    AppState.erpOrgName = connId;
                     AppState.connectionId = connId;
                     localStorage.setItem("fa_erp_org", connId);
                     DashboardService._finalizeConnection(provider, connId);
@@ -2491,14 +2479,14 @@ Office.onReady(() => {
          */
         async disconnectERP() {
             // Optimistically update AppState
-            AppState.erpConnected     = false;
-            AppState.erpType          = null;
-            AppState.erpOrgName       = null;
+            AppState.erpConnected = false;
+            AppState.erpType = null;
+            AppState.erpOrgName = null;
             AppState.erpConnectedDate = null;
-            AppState.isConnected      = false;
-            AppState.connectionId     = null;
+            AppState.isConnected = false;
+            AppState.connectionId = null;
             AppState.currentCompanyId = null;
-            AppState.forceWelcome     = true;
+            AppState.forceWelcome = true;
 
             localStorage.removeItem("fa_erp_connected");
             localStorage.removeItem("fa_erp_type");
@@ -2529,11 +2517,11 @@ Office.onReady(() => {
                 const conns = await connsRes.json();
                 const activeConns = (conns || []).filter(c => c.status !== 'Disconnected');
                 await Promise.all(activeConns.map(c =>
-                    ApiService.apiFetch(`/api/connections/${c.companyId}`, { method: "DELETE" }).catch(() => {})
+                    ApiService.apiFetch(`/api/connections/${c.companyId}`, { method: "DELETE" }).catch(() => { })
                 ));
-            } catch (_) {}
+            } catch (_) { }
 
-            try { await ExcelService.clearMasterData(); } catch (_) {}
+            try { await ExcelService.clearMasterData(); } catch (_) { }
 
             // Now re-render — all companies should be Disconnected, so it shows the disconnected view
             this.renderERPSection();
@@ -2554,6 +2542,7 @@ Office.onReady(() => {
             // AppState.currentCompanyId isn't known yet at this point and
             // the console must be scoped to the correct company from the
             // start, never showing another company's history.
+            this.bindTrialExpiredModal();
             this.bindWelcomeView();
             this.bindPlansView();
             this.bindPaymentView();
@@ -2563,8 +2552,94 @@ Office.onReady(() => {
             this.restoreSession();
         },
 
+        // ---- Trial Select Dialog ----
+        openTrialSelectDialog() {
+            const dialogUrl = window.location.origin + "/assets/trialselect.html";
+            let dialog = null;
+
+            Office.context.ui.displayDialogAsync(dialogUrl, { height: 60, width: 45, displayInIframe: true }, (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error("Failed to open trial select dialog:", asyncResult.error.message);
+                } else {
+                    dialog = asyncResult.value;
+                    dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                        try {
+                            const message = JSON.parse(arg.message);
+                            if (message.type === 'START_TRIAL') {
+                                dialog.close();
+                                // Mock a free trial subscription creation
+                                AppState.hasSubscription = true;
+                                AppState.subscriptionId = "sub_trial_" + Date.now();
+                                AppState.subscriptionPlan = "Free Trial (2 Hours)";
+                                AuthService._persistSubscription();
+                                DashboardService.render();
+                                ViewRouter.show("Dashboard");
+                                DashboardService.showStatus("Free Trial started successfully!", "success");
+
+                                // Trigger popup after 20 minutes
+                                setTimeout(() => {
+                                    const modal = document.getElementById("trialExpiredModal");
+                                    if (modal) {
+                                        modal.style.display = "flex";
+                                    }
+                              }, 1 * 60 * 1000);
+                            } else if (message.type === 'VIEW_PLANS') {
+                                dialog.close();
+                                ViewRouter.show("Plans");
+                            }
+                        } catch (e) {
+                            console.error("Error parsing dialog message:", e);
+                        }
+                    });
+                }
+            });
+        },
+
+        // ---- Trial Expiration Logic ----
+        checkTrialExpiration() {
+            if (AppState.subscriptionPlan !== "Free Trial (2 Hours)") return;
+            
+            const trialStartStr = localStorage.getItem("fa_trial_start");
+            if (!trialStartStr) return;
+            
+            const trialStart = parseInt(trialStartStr, 10);
+            const now = Date.now();
+            // Checking if 1 minute has passed (for testing purposes, change to 20 * 60 * 1000 for 20 minutes)
+            const elapsed = now - trialStart;
+            
+            if (elapsed > 1 * 60 * 1000) {
+                const modal = document.getElementById("trialExpiredModal");
+                if (modal && modal.style.display === "none") {
+                    modal.style.display = "flex";
+                }
+            }
+        },
+
+        // ---- Trial Expired Modal ----
+        bindTrialExpiredModal() {
+            const modal = document.getElementById("trialExpiredModal");
+            const btnClose = document.getElementById("btnCloseTrialExpired");
+            const btnUpgrade = document.getElementById("btnUpgradeNow");
+
+            if (btnClose) {
+                btnClose.addEventListener("click", () => {
+                    if (modal) modal.style.display = "none";
+                });
+            }
+
+            if (btnUpgrade) {
+                btnUpgrade.addEventListener("click", () => {
+                    if (modal) modal.style.display = "none";
+                    ViewRouter.show("Plans");
+                });
+            }
+        },
+
         // ---- Welcome View ----
         bindWelcomeView() {
+            let dialog = null;
+
+            // Bind the real Google and Microsoft login buttons
             document.getElementById("btnSignInGoogle")?.addEventListener("click", () => {
                 const btn = document.getElementById("btnSignInGoogle");
                 if (btn) btn.disabled = true;
@@ -2578,22 +2653,55 @@ Office.onReady(() => {
                 AuthService.openMicrosoftPopup();
                 setTimeout(() => { if (btn) btn.disabled = false; }, 3000);
             });
+
+            // Bind the main FinAccrual Sign In button to open the custom dialog
+            document.getElementById("btnSignIn")?.addEventListener("click", () => {
+                const btn = document.getElementById("btnSignIn");
+                if (btn) btn.disabled = true;
+                
+                const dialogUrl = window.location.origin + "/assets/accountpicker.html";
+                
+                Office.context.ui.displayDialogAsync(dialogUrl, { height: 50, width: 35, displayInIframe: true }, (asyncResult) => {
+                    setTimeout(() => { if (btn) btn.disabled = false; }, 3000);
+                    
+                    if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                        console.error("Failed to open dialog:", asyncResult.error.message);
+                    } else {
+                        dialog = asyncResult.value;
+                        dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                            try {
+                                const message = JSON.parse(arg.message);
+                                if (message.type === 'USE_ANOTHER') {
+                                    dialog.close();
+                                    // Hide the primary button, show the Google/Microsoft buttons in the taskpane
+                                    const primaryContainer = document.getElementById("primaryAuthContainer");
+                                    const secondaryContainer = document.getElementById("secondaryAuthContainer");
+                                    if (primaryContainer) primaryContainer.style.display = "none";
+                                    if (secondaryContainer) secondaryContainer.style.display = "flex";
+                                }
+                            } catch (e) {
+                                console.error("Error parsing dialog message:", e);
+                            }
+                        });
+                    }
+                });
+            });
         },
 
         // ---- Plans View ----
         bindPlansView() {
-            const toggle     = document.getElementById("billingCycleToggle");
+            const toggle = document.getElementById("billingCycleToggle");
             const monthLabel = document.getElementById("labelMonthly");
-            const yearLabel  = document.getElementById("labelYearly");
+            const yearLabel = document.getElementById("labelYearly");
 
             const updatePrices = (isYearly) => {
                 document.querySelectorAll("[data-monthly][data-yearly]").forEach(btn => {
                     const monthly = parseInt(btn.dataset.monthly);
-                    const yearly  = parseInt(btn.dataset.yearly);
+                    const yearly = parseInt(btn.dataset.yearly);
                     let amountId = "proAmount";
                     if (btn.id === "btnSelectBasic") amountId = "basicAmount";
                     else if (btn.id === "btnSelectStandard") amountId = "standardAmount";
-                    
+
                     const el = document.getElementById(amountId);
                     if (el) el.textContent = isYearly ? yearly : monthly;
 
@@ -2601,7 +2709,7 @@ Office.onReady(() => {
                     btn.dataset.activeCycle = isYearly ? "Yearly" : "Monthly";
                 });
                 if (monthLabel) monthLabel.classList.toggle("active-label", !isYearly);
-                if (yearLabel)  yearLabel.classList.toggle("active-label",  isYearly);
+                if (yearLabel) yearLabel.classList.toggle("active-label", isYearly);
             };
 
             // Initialize labels
@@ -2614,7 +2722,7 @@ Office.onReady(() => {
             // Plan select buttons
             document.querySelectorAll("[data-plan]").forEach(btn => {
                 btn.addEventListener("click", () => {
-                    const plan  = btn.dataset.plan;
+                    const plan = btn.dataset.plan;
                     const cycle = btn.dataset.activeCycle || "Monthly";
                     const price = btn.dataset.activePrice || btn.dataset.monthly || "Custom";
 
@@ -2624,14 +2732,14 @@ Office.onReady(() => {
                     }
 
                     // Populate payment view
-                    const payPlanEl  = document.getElementById("paymentPlanName");
+                    const payPlanEl = document.getElementById("paymentPlanName");
                     const payCycleEl = document.getElementById("paymentBillingCycle");
                     const payTotalEl = document.getElementById("paymentTotal");
-                    if (payPlanEl)  payPlanEl.textContent  = plan;
+                    if (payPlanEl) payPlanEl.textContent = plan;
                     if (payCycleEl) payCycleEl.textContent = cycle;
                     if (payTotalEl) payTotalEl.textContent = `₹${price}`;
 
-                    AppState.pendingPlan  = plan;
+                    AppState.pendingPlan = plan;
                     AppState.pendingPrice = price;
                     AppState.pendingCycle = cycle;
 
@@ -2713,7 +2821,7 @@ Office.onReady(() => {
                 }
             };
             document.getElementById("btnCopySubId")?.addEventListener("click", handleCopySubId);
-            
+
             // Dropdown Toggle
             const toggleDropdown = (e) => {
                 e.stopPropagation();
@@ -2779,7 +2887,7 @@ Office.onReady(() => {
                     }
                 });
             }
-            
+
             // Allow user to cancel connection attempt and go back to disconnected state
             document.getElementById("btnLogoutProvider")?.addEventListener("click", () => {
                 DashboardService.renderERPSection();
@@ -2803,7 +2911,7 @@ Office.onReady(() => {
                         DashboardService.showStatus(`Resumed QuickBooks session for ${toActivate.companyName}`, "success", null, "quickbooks");
                         return;
                     }
-                } catch (_) {}
+                } catch (_) { }
                 // No existing accounts — start OAuth
                 DashboardService.showProviderSelected("quickbooks");
                 DashboardService.launchERPOAuth("quickbooks");
@@ -2827,7 +2935,7 @@ Office.onReady(() => {
                         DashboardService.showStatus(`Resumed Xero session for ${toActivate.companyName}`, "success", null, "xero");
                         return;
                     }
-                } catch (_) {}
+                } catch (_) { }
                 // No existing accounts — start OAuth
                 DashboardService.showProviderSelected("xero");
                 DashboardService.launchERPOAuth("xero");
@@ -2859,13 +2967,13 @@ Office.onReady(() => {
                 const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
                 // Derive the provider from the active dashboard, fall back to quickbooks
                 const provider = AppState.currentProvider || "quickbooks";
-                
+
                 console.log("handleAddCompanyClick: provider = " + provider + ", AppState.currentProvider = " + AppState.currentProvider);
 
                 ApiService.apiFetch("/api/connections?mail=" + encodeURIComponent(AppState.userEmail || ""))
                     .then(r => r.json())
                     .then(conns => {
-                        const connsForProvider = (conns || []).filter(c => 
+                        const connsForProvider = (conns || []).filter(c =>
                             (c.platform || "").toLowerCase() === provider.toLowerCase()
                         );
                         if (connsForProvider.length >= maxAllowed) {
@@ -2915,7 +3023,7 @@ Office.onReady(() => {
                             row.className = `fa-modal-company-row ${isSelected ? "selected" : ""} ${isDisconnected ? "disconnected" : ""}`;
                             row.dataset.companyId = c.companyId;
                             row.dataset.platform = (c.platform || "quickbooks").toLowerCase();
-                            
+
                             const displayName = c.companyName || (isXero ? "Xero Organisation" : "QuickBooks Company");
 
                             row.innerHTML = `
@@ -2959,7 +3067,7 @@ Office.onReady(() => {
                     ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data: ", err));
                     try {
                         await ApiService.apiFetch(`/api/connections/${selectedModalCompanyId}/activate`, { method: "POST" });
-                    } catch (_) {}
+                    } catch (_) { }
                     DashboardService.renderERPSection();
                     DashboardService.showStatus("Active company switched successfully.", "success", null, switchedPlatform);
                 }
@@ -3182,7 +3290,7 @@ Office.onReady(() => {
             });
 
             // Provider Tab Toggles
-            const tabQB   = document.getElementById("tabQB");
+            const tabQB = document.getElementById("tabQB");
             const tabXero = document.getElementById("tabXero");
             const options = document.getElementById("connTierOptions");
 
@@ -3190,7 +3298,7 @@ Office.onReady(() => {
                 if (options) {
                     options.style.display = options.style.display === "flex" ? "none" : "flex";
                     options.style.flexDirection = "column";
-                    
+
                     // Render correct options list
                     const isQB = provider === "quickbooks";
                     document.getElementById("tierBasic").textContent = isQB ? "Q Basic" : "Xero Basic";
@@ -3217,7 +3325,7 @@ Office.onReady(() => {
                     e.stopPropagation();
                     document.querySelectorAll(".conn-tier-opt").forEach(o => o.classList.remove("selected"));
                     opt.classList.add("selected");
-                    
+
                     const tierName = opt.textContent;
                     AppState.erpTier = tierName;
                     const badge = document.getElementById("connTierBadge");
@@ -3236,11 +3344,11 @@ Office.onReady(() => {
             const handleRefreshClick = async (event) => {
                 const button = event.currentTarget;
                 const isProv = button.id === "btnRefreshScheduleProv";
-                
+
                 // Verify that both setup and pull steps are complete first
                 let isSetupComplete = false;
                 let isPullComplete = false;
-                
+
                 if (isProv) {
                     isSetupComplete = document.getElementById("provStepSetup")?.classList.contains("complete");
                     isPullComplete = document.getElementById("provStepPull")?.classList.contains("complete");
@@ -3357,15 +3465,15 @@ Office.onReady(() => {
                 }
             } else {
                 // Reset AppState to defaults
-                AppState.userEmail        = null;
-                AppState.userName         = null;
-                AppState.userProvider     = null;
-                AppState.hasSubscription  = false;
-                AppState.subscriptionId   = null;
+                AppState.userEmail = null;
+                AppState.userName = null;
+                AppState.userProvider = null;
+                AppState.hasSubscription = false;
+                AppState.subscriptionId = null;
                 AppState.subscriptionPlan = null;
-                AppState.erpConnected     = false;
-                AppState.erpType          = null;
-                AppState.erpOrgName       = null;
+                AppState.erpConnected = false;
+                AppState.erpType = null;
+                AppState.erpOrgName = null;
                 AppState.erpConnectedDate = null;
 
                 // Always show welcome screen

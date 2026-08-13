@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+  <body style="background:#1a0000;color:#ffaaaa;font-family:sans-serif;text-align:center;padding:40px;">
+    <div style="font-size:24px;">❌ Sign-in failed</div>
+    <div style="margin-top:10px;font-size:13px;">Request failed with status code 400</div>
+    <script>
+      setTimeout(function() {
+        if (window.opener) { window.opener.postMessage({ type: 'google_error', message: 'Request failed with status code 400' }, '*'); window.close(); }
+        else if (typeof Office !== 'undefined') { Office.onReady(function() { Office.context.ui.messageParent(JSON.stringify({ type: 'google_error' })); }); }
+        else { window.close(); }
+      }, 2000);
+    </script>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  </body>
+</html>

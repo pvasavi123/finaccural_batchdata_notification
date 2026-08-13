@@ -16,6 +16,7 @@ const path = require("path");
 
 
 const app = express();
+app.set('trust proxy', 1);
 
 
 // Performance Validation — times the FULL request lifecycle, so mount
