@@ -590,6 +590,15 @@ class XeroService {
 
                 const tag = items => items.map(i => ({ ...i, clientId: orgName, clientName: orgName }));
 
+                // Captured before the update below overwrites it — lets the
+                // frontend's Refresh Schedule flow distinguish "the very
+                // first sync for this connection" (nothing to append
+                // against yet, write everything) from "a later refresh
+                // where nothing happens to be new" — both look identical if
+                // you only look at isNew flags, since isNew is false either
+                // way.
+                const isFirstSync = !token.lastSyncedAt;
+
                 // First successful pull (or any subsequent one) marks the
                 // connection 'Active' — this is what takes it out of the
                 // initial 'Not Synced' state.
@@ -604,7 +613,8 @@ class XeroService {
                     vendors: tag(contacts.filter(c => c.isSupplier)),
                     accounts: tag(accounts),
                     classes: tag(classes),
-                    locations: tag(locations)
+                    locations: tag(locations),
+                    isFirstSync
                 };
             } catch (err) {
                 logger.error(`Error pulling Xero data for connection ${token.companyId}:`, err.message);
@@ -618,8 +628,11 @@ class XeroService {
             vendors: [...acc.vendors, ...curr.vendors],
             accounts: [...acc.accounts, ...curr.accounts],
             classes: [...acc.classes, ...curr.classes],
-            locations: [...acc.locations, ...curr.locations]
-        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [] });
+            locations: [...acc.locations, ...curr.locations],
+            // See QuickBooksService.pullMasterData's reduce for why this is
+            // an AND-merge across connections.
+            isFirstSync: acc.isFirstSync && curr.isFirstSync
+        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [], isFirstSync: true });
     }
 }
 

@@ -503,6 +503,15 @@ class QuickBooksService {
                 const orgName = comp?.name || comp?.legalName || token.companyName;
                 const tag = (list) => list.map(i => ({ ...i, clientId: orgName, clientName: orgName }));
 
+                // Captured before the update below overwrites it — this is
+                // what lets the frontend's Refresh Schedule flow tell "the
+                // very first sync for this connection" (nothing to append
+                // against yet, write everything) apart from "a later
+                // refresh where nothing happens to be new" (both look
+                // identical if you only look at isNew flags, since every
+                // record's isNew is false in both cases).
+                const isFirstSync = !token.lastSyncedAt;
+
                 await QuickBooksToken.update(
                     { last_synced_at: new Date(), status: 'Active' },
                     { where: { realm_id: token.companyId } }
@@ -514,7 +523,8 @@ class QuickBooksService {
                     vendors: tag(QuickBooksMapper.toVendorList(rawVend, token.lastSyncedAt)),
                     accounts: tag(QuickBooksMapper.toAccountList(rawAcc, token.lastSyncedAt)),
                     classes: tag(QuickBooksMapper.toClassList(rawClass, token.lastSyncedAt)),
-                    locations: tag(QuickBooksMapper.toLocationList(rawLoc, token.lastSyncedAt))
+                    locations: tag(QuickBooksMapper.toLocationList(rawLoc, token.lastSyncedAt)),
+                    isFirstSync
                 };
             } catch (err) {
                 logger.error(`Error pulling QB data for connection ${token.companyId}:`, err.message);
@@ -544,8 +554,16 @@ class QuickBooksService {
             vendors: [...acc.vendors, ...curr.vendors],
             accounts: [...acc.accounts, ...curr.accounts],
             classes: [...acc.classes, ...curr.classes],
-            locations: [...acc.locations, ...curr.locations]
-        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [] });
+            locations: [...acc.locations, ...curr.locations],
+            // A companyId-scoped pull (the normal case) is always exactly
+            // one connection, so this just reflects that one token. For the
+            // rare bulk (no companyId) pull spanning several connections,
+            // AND-merging means "first sync" only holds if every one of
+            // them is — mixing "never synced" and "already synced" here
+            // would otherwise leave it ambiguous which single answer to
+            // give the frontend for a mixed batch.
+            isFirstSync: acc.isFirstSync && curr.isFirstSync
+        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [], isFirstSync: true });
     }
 }
 

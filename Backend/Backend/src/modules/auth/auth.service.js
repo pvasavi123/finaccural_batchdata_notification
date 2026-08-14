@@ -159,10 +159,12 @@ class AuthService {
     /**
      * Return the Google OAuth 2.0 authorisation URL to redirect the
      * browser to.
+     * @param {string} [loginHint] - Previously-seen account's email; see
+     *   GoogleService.getAuthUrl() for why this skips the account chooser.
      * @returns {string}
      */
-    static getGoogleAuthUrl() {
-        return GoogleService.getAuthUrl();
+    static getGoogleAuthUrl(loginHint) {
+        return GoogleService.getAuthUrl(loginHint);
     }
 
     /**
@@ -228,10 +230,13 @@ class AuthService {
     /**
      * Return the Microsoft Entra ID OAuth 2.0 authorisation URL to
      * redirect the browser to.
+     * @param {string} [loginHint] - Previously-seen account's email; see
+     *   MicrosoftService.getAuthUrl() for why this skips the account
+     *   chooser.
      * @returns {string}
      */
-    static getMicrosoftAuthUrl() {
-        return MicrosoftService.getAuthUrl();
+    static getMicrosoftAuthUrl(loginHint) {
+        return MicrosoftService.getAuthUrl(loginHint);
     }
 
     /**

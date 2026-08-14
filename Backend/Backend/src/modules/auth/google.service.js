@@ -20,9 +20,22 @@ class GoogleAuthService {
 
     /**
      * Build the Google OAuth 2.0 authorisation redirect URL.
+     *
+     * @param {string} [loginHint] - A previously-seen account's email.
+     *   When present, Google is told which account to use up front via
+     *   `login_hint` and skips its "choose an account" screen — this is
+     *   what lets the account-picker's "previous account" row jump
+     *   straight through instead of re-showing the full chooser. The
+     *   forced `prompt: 'consent'` is dropped in that case too: it's only
+     *   needed to guarantee a consent screen the very first time (e.g.
+     *   "Add account"), and forcing it on every return visit is exactly
+     *   the friction a remembered account is meant to avoid. Google still
+     *   shows consent on its own if scopes were never granted or were
+     *   revoked, so this doesn't weaken authorisation — it just stops
+     *   asking again when it doesn't need to.
      * @returns {string}
      */
-    getAuthUrl() {
+    getAuthUrl(loginHint) {
         const clientId    = config.GOOGLE.CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
         const redirectUri = config.GOOGLE.REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI || 'http://localhost:8000/api/auth/google/callback';
 
@@ -36,9 +49,15 @@ class GoogleAuthService {
             redirect_uri:  redirectUri,
             response_type: 'code',
             scope:         'openid email profile',
-            access_type:   'offline',
-            prompt:        'consent'
+            access_type:   'offline'
         };
+
+        if (loginHint) {
+            params.login_hint = loginHint;
+        } else {
+            params.prompt = 'consent';
+        }
+
         return `https://accounts.google.com/o/oauth2/v2/auth?${querystring.stringify(params)}`;
     }
 

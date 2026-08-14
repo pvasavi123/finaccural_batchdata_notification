@@ -770,7 +770,8 @@ class XeroController {
                 vendors:   aggregated.vendors,
                 accounts:  aggregated.accounts,
                 classes:   aggregated.classes,
-                locations: aggregated.locations
+                locations: aggregated.locations,
+                isFirstSync: aggregated.isFirstSync
             });
         } catch (err) {
             return next(err);

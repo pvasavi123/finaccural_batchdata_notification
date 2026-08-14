@@ -69,11 +69,16 @@ class AuthController {
         }
     }
     // ----------------------------------------------------------------
-    // GET /api/auth/google/connect
+    // GET /api/auth/google/connect?login_hint=<email>
+    // login_hint is optional — passed by the account picker when the
+    // user clicked a remembered "previous account" row, so Google can
+    // skip straight past its account-chooser screen. Left off, this
+    // behaves exactly as before (fresh "Add account" picks).
     // ----------------------------------------------------------------
     googleConnect(req, res) {
         try {
-            const authUrl = AuthService.getGoogleAuthUrl();
+            const loginHint = AuthController._safeLoginHint(req.query.login_hint);
+            const authUrl = AuthService.getGoogleAuthUrl(loginHint);
             res.redirect(authUrl);
         } catch (error) {
             logger.error('Error generating Google OAuth URL', error);
@@ -94,11 +99,13 @@ class AuthController {
         }
     }
     // ----------------------------------------------------------------
-    // GET /api/microsoft/connect  (aliased at /api/auth/microsoft/connect)
+    // GET /api/microsoft/connect?login_hint=<email>  (aliased at /api/auth/microsoft/connect)
+    // Same login_hint contract as googleConnect() above.
     // ----------------------------------------------------------------
     microsoftConnect(req, res) {
         try {
-            const authUrl = AuthService.getMicrosoftAuthUrl();
+            const loginHint = AuthController._safeLoginHint(req.query.login_hint);
+            const authUrl = AuthService.getMicrosoftAuthUrl(loginHint);
             res.redirect(authUrl);
         } catch (error) {
             logger.error('Error generating Microsoft OAuth URL', error);
@@ -195,6 +202,26 @@ class AuthController {
         } catch (error) {
             next(error instanceof Error && error.isOperational ? error : new AppError('Something went wrong on our end. Please try again later.', 500, 'ERR_INTERNAL', error.message));
         }
+    }
+
+    // ----------------------------------------------------------------
+    // Helpers
+    // ----------------------------------------------------------------
+
+    /**
+     * Validates a `login_hint` query param before it's forwarded to
+     * Google/Microsoft's authorisation endpoint. Deliberately strict —
+     * this only ever needs to carry an email address the account picker
+     * already showed the user, so anything that doesn't look like one
+     * (wrong type, too long, no '@') is dropped rather than forwarded.
+     * @param {*} raw
+     * @returns {string|undefined}
+     */
+    static _safeLoginHint(raw) {
+        if (typeof raw !== 'string') return undefined;
+        const trimmed = raw.trim();
+        if (!trimmed || trimmed.length > 254 || !trimmed.includes('@')) return undefined;
+        return trimmed;
     }
 }
 module.exports = new AuthController();

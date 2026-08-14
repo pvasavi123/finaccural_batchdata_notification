@@ -20,9 +20,17 @@ class MicrosoftAuthService {
 
     /**
      * Build the Microsoft Entra ID OAuth 2.0 authorisation redirect URL.
+     *
+     * @param {string} [loginHint] - A previously-seen account's email.
+     *   When present, Microsoft is told which account to use via
+     *   `login_hint`, and the forced `prompt: 'select_account'` is
+     *   dropped — that's what lets the account-picker's "previous
+     *   account" row skip straight past the account-chooser screen
+     *   instead of asking the user to pick again. Without a hint (fresh
+     *   "Add account") the chooser is still forced, same as before.
      * @returns {string}
      */
-    getAuthUrl() {
+    getAuthUrl(loginHint) {
         const clientId    = config.MICROSOFT.CLIENT_ID || process.env.MICROSOFT_CLIENT_ID;
         const redirectUri = config.MICROSOFT.REDIRECT_URI || process.env.MICROSOFT_REDIRECT_URI || 'http://localhost:8000/api/microsoft/callback';
         const tenantId    = config.MICROSOFT.TENANT_ID || process.env.MICROSOFT_TENANT_ID || 'consumers';
@@ -38,9 +46,15 @@ class MicrosoftAuthService {
             redirect_uri:  redirectUri,
             response_type: 'code',
             response_mode: 'query',
-            scope:         scopes,
-            prompt:        'select_account'
+            scope:         scopes
         };
+
+        if (loginHint) {
+            params.login_hint = loginHint;
+        } else {
+            params.prompt = 'select_account';
+        }
+
         return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${querystring.stringify(params)}`;
     }
 

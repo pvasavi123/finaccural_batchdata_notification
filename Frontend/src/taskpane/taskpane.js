@@ -691,6 +691,39 @@ Office.onReady(() => {
         }, 0);
     }
 
+    /**
+     * Counts strictly-new records (isNew only, not isUpdated) across a
+     * Master Data Pull response. Used by the Refresh Schedule flow —
+     * see ExcelService.appendNewMasterData — which only ever appends
+     * brand-new records to the sheet and never touches previously
+     * imported rows, so "new" here deliberately excludes "updated".
+     * @param {object} data - Master data payload (accounts/classes/locations/customers/vendors)
+     * @returns {number}
+     */
+    function countNewMasterDataRecords(data) {
+        if (!data) return 0;
+        const sections = [data.accounts, data.classes, data.locations, data.customers, data.vendors];
+        return sections.reduce((total, list) => {
+            return Array.isArray(list) ? total + list.filter(item => !!item.isNew).length : total;
+        }, 0);
+    }
+
+    /**
+     * Total record count across a Master Data Pull response, regardless
+     * of isNew/isUpdated. Used only for messaging on a first-sync
+     * Refresh Schedule call (see ExcelService.appendNewMasterData) —
+     * every record written there is "new" only in the trivial sense
+     * that the sheet was empty before, so "N new records" would be a
+     * confusing way to describe it; "N records imported" is clearer.
+     * @param {object} data
+     * @returns {number}
+     */
+    function countAllMasterDataRecords(data) {
+        if (!data) return 0;
+        const sections = [data.accounts, data.classes, data.locations, data.customers, data.vendors];
+        return sections.reduce((total, list) => (Array.isArray(list) ? total + list.length : total), 0);
+    }
+
     const ExcelService = {
         /**
          * Populates Excel workbook sheet "1.Master_Data" with ERP payload.
@@ -893,6 +926,176 @@ Office.onReady(() => {
 
                 await context.sync();
             });
+        },
+
+        /**
+         * Appends only brand-new records from a Master Data Pull to the
+         * "1.Master_Data" sheet. This is what powers the Refresh Schedule
+         * button — unlike writeMasterData (used by the initial "Pull
+         * Data" step), it NEVER clears or reorders existing rows; it only
+         * ever adds rows below whatever is already there.
+         *
+         * - First sync for this connection (data.isFirstSync === true,
+         *   set by the backend from the connection's last_synced_at):
+         *   the sheet has nothing to preserve yet, so this just delegates
+         *   to writeMasterData and writes everything, same as before.
+         * - Every later refresh: only records the backend flagged isNew
+         *   (created after the connection's last successful sync) are
+         *   written, appended after exactly one blank row below the
+         *   current end of the sheet's data — never inside existing
+         *   rows, never overwriting them. isUpdated records are
+         *   deliberately left alone: an append-only ledger has no way to
+         *   "update" a row it already wrote without touching prior data,
+         *   which this must never do.
+         * - No new records: nothing is written at all, so nothing here
+         *   ever produces a duplicate of a previously-appended record.
+         *
+         * @param {string} provider - Active ERP provider ("quickbooks" | "xero")
+         * @param {object} data - Master Data Pull response, including isFirstSync
+         * @returns {Promise<number>} number of records written (new-only on a
+         *   later refresh; the full total on a first sync)
+         */
+        async appendNewMasterData(provider, data) {
+            if (!data) return 0;
+
+            if (data.isFirstSync) {
+                await ExcelService.writeMasterData(provider, data);
+                return countAllMasterDataRecords(data);
+            }
+
+            const newCustomers = Array.isArray(data.customers) ? data.customers.filter(c => c.isNew) : [];
+            const newVendors   = Array.isArray(data.vendors)   ? data.vendors.filter(v => v.isNew)   : [];
+            const newAccounts  = Array.isArray(data.accounts)  ? data.accounts.filter(a => a.isNew)  : [];
+            const newClasses   = Array.isArray(data.classes)   ? data.classes.filter(c => c.isNew)   : [];
+            const newLocations = Array.isArray(data.locations) ? data.locations.filter(l => l.isNew) : [];
+
+            const totalNew = newCustomers.length + newVendors.length + newAccounts.length
+                + newClasses.length + newLocations.length;
+            if (totalNew === 0) return 0;
+
+            const fallbackOrgName = provider === "quickbooks" ? "QuickBooks Company" : "Xero Organisation";
+            const orgGroupsMap = new Map();
+            const getOrCreateGroup = (name) => {
+                const cleanName = (name && name !== "Default" && name !== "Default Organization") ? name : fallbackOrgName;
+                const key = cleanName.trim();
+                if (!orgGroupsMap.has(key)) {
+                    orgGroupsMap.set(key, { name: cleanName, accounts: [], classes: [], locations: [], entities: [] });
+                }
+                return orgGroupsMap.get(key);
+            };
+
+            for (const a of newAccounts) {
+                getOrCreateGroup(a.clientName || a.clientId || fallbackOrgName).accounts.push(a);
+            }
+            for (const c of newClasses) {
+                getOrCreateGroup(c.clientName || c.clientId || fallbackOrgName).classes.push(c);
+            }
+            for (const l of newLocations) {
+                getOrCreateGroup(l.clientName || l.clientId || fallbackOrgName).locations.push(l);
+            }
+            for (const cust of newCustomers) {
+                const group = getOrCreateGroup(cust.clientName || cust.clientId || fallbackOrgName);
+                group.entities.push({
+                    name: cust.name || cust.DisplayName || cust.Name || "",
+                    type: "Customer",
+                    id: cust.id || cust.Id || cust.ContactID || "",
+                    status: cust.active !== undefined ? (cust.active ? "Active" : "Inactive") : "Active"
+                });
+            }
+            for (const vend of newVendors) {
+                const group = getOrCreateGroup(vend.clientName || vend.clientId || fallbackOrgName);
+                group.entities.push({
+                    name: vend.name || vend.DisplayName || vend.Name || "",
+                    type: "Vendor",
+                    id: vend.id || vend.Id || vend.ContactID || "",
+                    status: vend.active !== undefined ? (vend.active ? "Active" : "Inactive") : "Active"
+                });
+            }
+
+            await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getItem("1.Master_Data");
+
+                // Find the first fully-blank row below whatever is already
+                // on the sheet, so this batch starts exactly one blank row
+                // after the last existing one — derived from the sheet's
+                // own used range rather than any separately-tracked
+                // position, so it stays correct even if the sheet was
+                // touched between refreshes.
+                const usedRange = sheet.getUsedRangeOrNullObject();
+                usedRange.load(["rowIndex", "rowCount", "isNullObject"]);
+                await context.sync();
+
+                const lastUsedRow1Indexed = usedRange.isNullObject ? 1 : (usedRange.rowIndex + usedRange.rowCount);
+                let currentRow = Math.max(2, lastUsedRow1Indexed + 2);
+
+                for (const [, group] of orgGroupsMap) {
+                    const orgName = group.name;
+                    const accCount = group.accounts.length;
+                    const classCount = group.classes.length;
+                    const locCount = group.locations.length;
+                    const entityCount = group.entities.length;
+                    const maxRows = Math.max(1, accCount, classCount, locCount, entityCount);
+
+                    sheet.getRange(`A${currentRow}:B${currentRow}`).values = [[orgName, orgName]];
+
+                    if (accCount > 0) {
+                        const accValues = group.accounts.map(a => [
+                            orgName,
+                            a.acctNum || a.code || a.AcctNum || a.Code || "",
+                            a.name || a.Name || "",
+                            a.accountType || a.type || a.AccountType || a.Type || "",
+                            a.accountSubType || a.description || a.AccountSubType || "",
+                            a.classification || a.Classification || "",
+                            a.fullyQualifiedName || a.name || a.Name || "",
+                            a.active !== undefined ? (a.active ? "Active" : "Inactive") : "Active",
+                            a.id || a.Id || a.AccountID || ""
+                        ]);
+                        await writeRowsInBatches(context, sheet, "D", "L", currentRow, accValues, accValues.map(() => true));
+                    }
+
+                    if (classCount > 0) {
+                        const classValues = group.classes.map(c => [
+                            orgName,
+                            c.name || c.Name || "",
+                            c.id || c.Id || "",
+                            c.active !== undefined ? (c.active ? "Active" : "Inactive") : "Active"
+                        ]);
+                        await writeRowsInBatches(context, sheet, "N", "Q", currentRow, classValues, classValues.map(() => true));
+                    }
+
+                    if (locCount > 0) {
+                        const locValues = group.locations.map(l => [
+                            orgName,
+                            l.name || l.Name || "",
+                            l.id || l.Id || "",
+                            l.active !== undefined ? (l.active ? "Active" : "Inactive") : "Active"
+                        ]);
+                        await writeRowsInBatches(context, sheet, "S", "V", currentRow, locValues, locValues.map(() => true));
+                    }
+
+                    if (entityCount > 0) {
+                        const entityValues = group.entities.map(e => [orgName, e.name, e.type, e.id, e.status]);
+                        await writeRowsInBatches(context, sheet, "X", "AB", currentRow, entityValues, entityValues.map(() => true));
+                    }
+
+                    const rangeToFormat = sheet.getRange(`A${currentRow}:AB${currentRow + maxRows - 1}`);
+                    rangeToFormat.format.font.size = 11;
+                    rangeToFormat.format.wrapText = true;
+
+                    // No extra gap between orgs within a single batch — the
+                    // spec calls for exactly one blank row between whole
+                    // refresh batches, not between organizations inside
+                    // one; that one-row gap is already accounted for above
+                    // when currentRow was first computed.
+                    currentRow += maxRows;
+                }
+
+                sheet.getRange("A:AB").format.columnWidth = 115;
+
+                await context.sync();
+            });
+
+            return totalNew;
         },
 
         async clearMasterData() {
@@ -1114,9 +1317,18 @@ Office.onReady(() => {
          * - For new users:      popup sends  { type: 'google_authed', email, name, subscriptionId, plan }
          * - For returning users (if future backend check skips popup): sends { type: 'google_profile', ... }
          * - On logout click:    popup sends  { type: 'google_cancelled' }
+         *
+         * @param {string} [loginHint] - Email of a remembered account
+         *   (from the account picker's "previous account" row). When set,
+         *   Google skips its own account-chooser screen and goes straight
+         *   to that account, landing the user on the Dashboard the same
+         *   way an already-connected QuickBooks/Xero company just shows
+         *   its details instead of re-prompting to connect.
          */
-        openGooglePopup() {
-            const googleAuthUrl = `${ApiService.BASE}/api/auth/google/connect`;
+        openGooglePopup(loginHint) {
+            const googleAuthUrl = loginHint
+                ? `${ApiService.BASE}/api/auth/google/connect?login_hint=${encodeURIComponent(loginHint)}`
+                : `${ApiService.BASE}/api/auth/google/connect`;
 
             const msgHandler = (event) => {
                 if (!event.data) return;
@@ -1173,9 +1385,14 @@ Office.onReady(() => {
         /**
          * Opens a mock Microsoft OAuth flow.
          * In production, replace with real Microsoft MSAL / OAuth URL.
+         *
+         * @param {string} [loginHint] - Email of a remembered account; see
+         *   openGooglePopup() above for why this is passed through.
          */
-        openMicrosoftPopup() {
-            const mockMSUrl = `${ApiService.BASE}/api/microsoft/connect`;
+        openMicrosoftPopup(loginHint) {
+            const mockMSUrl = loginHint
+                ? `${ApiService.BASE}/api/microsoft/connect?login_hint=${encodeURIComponent(loginHint)}`
+                : `${ApiService.BASE}/api/microsoft/connect`;
 
             const msgHandler = (event) => {
                 if (!event.data) return;
@@ -2684,10 +2901,15 @@ Office.onReady(() => {
                                 } else if (message.type === 'USE_EXISTING') {
                                     dialog.close();
                                     const provider = localStorage.getItem("fa_user_provider") || localStorage.getItem("fa_last_user_provider") || "google";
+                                    // Pass the remembered email through as a login hint so
+                                    // Google/Microsoft skip their own account-chooser screen
+                                    // and go straight to that account — the same "already
+                                    // connected, just show it" feel as re-opening an existing
+                                    // QuickBooks/Xero connection instead of reconnecting.
                                     if (provider === "microsoft") {
-                                        AuthService.openMicrosoftPopup();
+                                        AuthService.openMicrosoftPopup(savedEmail || undefined);
                                     } else {
-                                        AuthService.openGooglePopup();
+                                        AuthService.openGooglePopup(savedEmail || undefined);
                                     }
                                 }
                             } catch (e) {
@@ -3384,17 +3606,27 @@ Office.onReady(() => {
                     DashboardService.showStatus("Refreshing...", "success", null, AppState.currentProvider);
 
                     const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
-                    await ExcelService.writeMasterData(AppState.currentProvider, data);
+                    // Refresh Schedule never re-pulls/re-writes the whole
+                    // sheet — it appends only records the backend flagged
+                    // isNew since the last successful sync (or, on a true
+                    // first sync, writes everything once). See
+                    // ExcelService.appendNewMasterData.
+                    const newCount = await ExcelService.appendNewMasterData(AppState.currentProvider, data);
 
                     const timestamp = new Date().toLocaleTimeString();
                     await ExcelService.stampLastRefreshed(timestamp);
 
-                    const changedCount = countChangedMasterDataRecords(data);
                     const refreshTitle = "Data refresh completed successfully.";
-                    const refreshDetail = changedCount > 0
-                        ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
-                        : "Data synchronized successfully.";
-                    DashboardService.addLog("Live data refreshed and timestamp stamped successfully.");
+                    const refreshDetail = data && data.isFirstSync
+                        ? `${newCount} record${newCount === 1 ? "" : "s"} imported.`
+                        : (newCount > 0
+                            ? `${newCount} new record${newCount === 1 ? "" : "s"} appended.`
+                            : "No new data since the last refresh.");
+                    DashboardService.addLog(
+                        newCount > 0
+                            ? `Live data refreshed — ${refreshDetail}`
+                            : "Live data refreshed — no new records since the last refresh."
+                    );
                     DashboardService.showStatus(refreshTitle, "success", refreshDetail, AppState.currentProvider);
                 } catch (err) {
                     console.error("Refresh error:", err);

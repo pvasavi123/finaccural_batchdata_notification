@@ -304,6 +304,11 @@ router.get('/pull-master-data', authenticate, validate(schemas.pullMasterDataQue
             accounts:  aggregated.accounts,
             classes:   aggregated.classes,
             locations: aggregated.locations,
+            // Tells the frontend's Refresh Schedule flow whether this is the
+            // connection's very first pull (write everything) or a later
+            // one (append only isNew-flagged records) — see
+            // QuickBooksService/XeroService.pullMasterData.
+            isFirstSync: aggregated.isFirstSync,
             tokenRefreshed
         });
     } catch (err) {
