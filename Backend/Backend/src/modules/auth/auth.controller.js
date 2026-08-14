@@ -203,6 +203,22 @@ class AuthController {
             next(error instanceof Error && error.isOperational ? error : new AppError('Something went wrong on our end. Please try again later.', 500, 'ERR_INTERNAL', error.message));
         }
     }
+    // ----------------------------------------------------------------
+    // POST /api/auth/start-trial
+    // Explicit "Start Free Trial" choice from the Free Trial vs
+    // Subscription Plan screen — sets plan + a fresh trial_ends_at
+    // clock starting now. New accounts get no plan at signup (see
+    // AuthService._newAccountDefaults()), so this is the only place
+    // the trial actually begins.
+    // ----------------------------------------------------------------
+    async startTrial(req, res, next) {
+        try {
+            const { user } = await AuthService.startTrial(req.user.userId);
+            return res.json({ success: true, user });
+        } catch (error) {
+            next(error instanceof Error && error.isOperational ? error : new AppError('Something went wrong on our end. Please try again later.', 500, 'ERR_INTERNAL', error.message));
+        }
+    }
 
     // ----------------------------------------------------------------
     // Helpers

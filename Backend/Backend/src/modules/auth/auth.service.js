@@ -45,17 +45,40 @@ class AuthService {
     }
 
     /**
-     * Fields every brand-new signup gets, regardless of provider:
-     * a default plan and a trial clock starting now.
+     * Fields every brand-new signup gets, regardless of provider.
+     * Deliberately leaves plan/trial_ends_at unset — auto-enrolling a
+     * brand-new account into the trial here meant the frontend's "no
+     * plan yet" check (checkSubscription -> !!user.plan) was never
+     * false, so new users skipped straight past the Free Trial vs
+     * Subscription Plan screen (AppController.openTrialSelectDialog)
+     * into an already-running trial they never chose. The trial clock
+     * now only starts once the user explicitly picks "Start Free
+     * Trial" — see startTrial() below.
      * Centralised here so signup(), handleGoogleCallback(), and
      * handleMicrosoftCallback() can't drift out of sync on this.
-     * @returns {{ plan: string, trial_ends_at: Date }}
+     * @returns {{ plan: null, trial_ends_at: null }}
      */
     static _newAccountDefaults() {
         return {
+            plan:          null,
+            trial_ends_at: null
+        };
+    }
+
+    /**
+     * Starts the free trial for an already-authenticated user — called
+     * when they explicitly choose "Start Free Trial" on the Free Trial
+     * vs Subscription Plan screen. Sets the plan and a fresh
+     * trial_ends_at clock starting now (config.TRIAL.DURATION_MS long).
+     * @param {number} userId
+     * @returns {Promise<{ user: UserDTO }>}
+     */
+    static async startTrial(userId) {
+        const user = await UserRepository.update(userId, {
             plan:          config.TRIAL.DEFAULT_PLAN,
             trial_ends_at: new Date(Date.now() + config.TRIAL.DURATION_MS)
-        };
+        });
+        return { user: AuthService._toUserDTO(user) };
     }
 
     /**

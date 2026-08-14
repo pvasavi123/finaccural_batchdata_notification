@@ -381,7 +381,7 @@ class XeroService {
 
     // ── Self-contained Connections Management & Pulling ────────────────
 
-    static PLAN_LIMITS = { basic: 1, standard: 3, pro: 10 };
+    static PLAN_LIMITS = { trial: 1, basic: 1, standard: 3, pro: 10 };
 
     static getMaxConnections(plan) {
         return XeroService.PLAN_LIMITS[(plan || 'pro').toLowerCase()] ?? 10;

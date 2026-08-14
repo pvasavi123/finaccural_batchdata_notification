@@ -39,6 +39,11 @@ Office.onReady(() => {
         hasSubscription: localStorage.getItem("fa_has_subscription") === "true",
         subscriptionId: localStorage.getItem("fa_subscription_id") || null,
         subscriptionPlan: (v => (!v || v === 'null' || v === 'undefined') ? null : v)(localStorage.getItem("fa_subscription_plan")),
+        // Server-issued trial expiry (ms epoch), set at signup as
+        // trial_ends_at and fetched via /api/auth/me. This is the
+        // authoritative clock for the trial-expired popup — see
+        // AppController.checkTrialExpiration().
+        trialEndsAt: (v => (v ? parseInt(v, 10) : null))(localStorage.getItem("fa_trial_ends_at")),
 
         // Pending checkout details (set when user selects a plan)
         pendingPlan: null,
@@ -65,6 +70,7 @@ Office.onReady(() => {
         currentProvider: "quickbooks",
         get currentTier() {
             const plan = (AppState.subscriptionPlan || "pro").toLowerCase();
+            if (plan.includes("trial")) return "trial";
             if (plan.includes("basic")) return "basic";
             if (plan.includes("standard")) return "standard";
             return "pro";
@@ -72,6 +78,19 @@ Office.onReady(() => {
         connectionId: null,
         isConnected: false
     };
+
+    // Maximum connected companies (per ERP platform) allowed for a given
+    // plan name. Matches PLAN_LIMITS in Backend/src/modules/{quickbooks,xero}/service.js
+    // — keep both in sync. Uses `.includes()` so it matches both the short
+    // backend tier value ("trial", "basic", "standard") and any longer
+    // display label (e.g. "Free Trial (2 Hours)").
+    function getMaxCompaniesForPlan(plan) {
+        const p = (plan || "").toLowerCase();
+        if (p.includes("trial")) return 1;
+        if (p.includes("basic")) return 1;
+        if (p.includes("standard")) return 3;
+        return 10;
+    }
 
     // ============================================================
     // 2. VIEW ROUTER
@@ -566,6 +585,20 @@ Office.onReady(() => {
                 // Return fallback state if network error or session expired
                 return { hasSubscription: AppState.hasSubscription };
             }
+        },
+
+        /**
+         * Starts the free trial for the signed-in user (explicit choice
+         * from the Free Trial vs Subscription Plan screen). The backend
+         * sets plan + a fresh trial_ends_at clock starting now, so the
+         * 2-minute countdown begins at the moment the user actually opts
+         * in — not at account-creation time.
+         * @returns {Promise<{success: boolean, user?: object}>}
+         */
+        async startTrial() {
+            const res = await this.apiFetch("/api/auth/start-trial", { method: "POST" });
+            if (!res.ok) throw new Error("Failed to start free trial.");
+            return await res.json();
         },
 
         /** Checks ERP token validity from backend (JWT required). */
@@ -1265,6 +1298,7 @@ Office.onReady(() => {
             DashboardService.render();
             ViewRouter.show("Dashboard");
             DashboardService.showStatus("Login successful.", "success");
+            AppController.startTrialExpirationWatcher();
         },
 
         /**
@@ -1301,6 +1335,7 @@ Office.onReady(() => {
                     DashboardService.render();
                     ViewRouter.show("Dashboard");
                     DashboardService.showStatus("Login successful.", "success");
+                    AppController.startTrialExpirationWatcher();
                 } else {
                     // Plan is null or missing — show trial vs subscribe popup
                     AppController.openTrialSelectDialog();
@@ -1823,7 +1858,7 @@ Office.onReady(() => {
 
                         // Populate Xero Multi-Select Checklist Card
                         const currentPlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
-                        const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
+                        const maxAllowed = getMaxCompaniesForPlan(currentPlan);
                         const xeroConns = conns.filter(c => (c.platform || "").toLowerCase() === "xero");
 
                         let xeroSelected = new Set(xeroConns.filter(c => c.status !== 'Disconnected').map(c => c.companyId));
@@ -2036,7 +2071,7 @@ Office.onReady(() => {
 
                     // Populate Subscription Stats (filtered by current active platform: quickbooks or xero)
                     const currentPlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
-                    const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
+                    const maxAllowed = getMaxCompaniesForPlan(currentPlan);
 
                     const connectedCount = platformConns.length;
                     const remaining = Math.max(0, maxAllowed - connectedCount);
@@ -2792,16 +2827,35 @@ Office.onReady(() => {
                             const message = JSON.parse(arg.message);
                             if (message.type === 'START_TRIAL') {
                                 dialog.close();
-                                // Mock a free trial subscription creation
-                                AppState.hasSubscription = true;
-                                AppState.subscriptionId = "sub_trial_" + Date.now();
-                                AppState.subscriptionPlan = "Free Trial (2 Hours)";
-                                AuthService._persistSubscription();
-                                DashboardService.render();
-                                ViewRouter.show("Dashboard");
-                                                                DashboardService.showStatus("Free Trial started successfully!", "success");
-                                localStorage.setItem("fa_trial_start", Date.now().toString());
-                                AppController.checkTrialExpiration();
+                                // Ask the backend to actually start the trial
+                                // (sets plan + a real trial_ends_at clock
+                                // starting now) rather than faking it
+                                // client-side, so the 2-minute countdown and
+                                // the 1-company limit are both enforced from
+                                // a real server timestamp.
+                                ApiService.startTrial()
+                                    .then((result) => {
+                                        const user = result?.user || {};
+                                        AppState.hasSubscription = true;
+                                        AppState.subscriptionId = AppState.subscriptionId || ("sub_trial_" + Date.now());
+                                        AppState.subscriptionPlan = user.plan || "trial";
+                                        AppState.trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt).getTime() : null;
+                                        if (AppState.trialEndsAt) {
+                                            localStorage.setItem("fa_trial_ends_at", String(AppState.trialEndsAt));
+                                        }
+                                        AuthService._persistSubscription();
+                                        DashboardService.render();
+                                        ViewRouter.show("Dashboard");
+                                        DashboardService.showStatus("Free Trial started successfully!", "success");
+                                        // Legacy local-timer fallback, kept in sync in case
+                                        // trialEndsAt couldn't be read from the response.
+                                        localStorage.setItem("fa_trial_start", Date.now().toString());
+                                        AppController.startTrialExpirationWatcher();
+                                    })
+                                    .catch((err) => {
+                                        console.error("Failed to start free trial:", err);
+                                        DashboardService.showStatus("Couldn't start your free trial. Please try again.", "error");
+                                    });
                             } else if (message.type === 'VIEW_PLANS') {
                                 dialog.close();
                                 ViewRouter.show("Plans");
@@ -2815,21 +2869,87 @@ Office.onReady(() => {
         },
 
         // ---- Trial Expiration Logic ----
-        checkTrialExpiration() {
-            if (AppState.subscriptionPlan !== "Free Trial (2 Hours)") return;
-            
+        // Fallback only, used for the client-only mock trial started from
+        // trialselect.html (no backend call, so no server trialEndsAt
+        // exists for it). Real accounts get a server-issued trial_ends_at
+        // (2 minutes by default — see Backend core/config TRIAL.DURATION_MS)
+        // which is authoritative whenever it's available.
+        TRIAL_DURATION_MS: 2 * 60 * 1000,
+        _trialWatcherId: null,
+
+        isOnTrial() {
+            return (AppState.subscriptionPlan || "").toLowerCase().includes("trial");
+        },
+
+        // Resolves the ms-epoch timestamp the trial ends at, preferring the
+        // real backend value (AppState.trialEndsAt, from /api/auth/me) over
+        // the local mock-flow timer.
+        getTrialEndTimestamp() {
+            if (AppState.trialEndsAt) return AppState.trialEndsAt;
             const trialStartStr = localStorage.getItem("fa_trial_start");
-            if (!trialStartStr) return;
-            
-            const trialStart = parseInt(trialStartStr, 10);
-            const now = Date.now();
-            const elapsed = now - trialStart;
-            
-            if (elapsed > 1 * 60 * 1000) { // 1 minute for testing
+            if (!trialStartStr) return null;
+            return parseInt(trialStartStr, 10) + AppController.TRIAL_DURATION_MS;
+        },
+
+        checkTrialExpiration() {
+            if (!AppController.isOnTrial()) {
+                // Plan changed (e.g. user upgraded) — no need to keep polling.
+                AppController.stopTrialExpirationWatcher();
+                return;
+            }
+
+            const endTs = AppController.getTrialEndTimestamp();
+            if (!endTs) return;
+
+            if (Date.now() >= endTs) {
                 const modal = document.getElementById("trialExpiredModal");
-                if (modal && modal.style.display === "none") {
+                if (modal && modal.style.display !== "flex") {
                     modal.style.display = "flex";
                 }
+                // Trial is over — nothing left to watch for.
+                AppController.stopTrialExpirationWatcher();
+            }
+        },
+
+        // Polls once a second so the "Upgrade Now" popup appears the moment
+        // the trial window elapses, instead of only being checked one time
+        // right when the trial starts (which always read as 0ms elapsed and
+        // so never actually showed the popup).
+        startTrialExpirationWatcher() {
+            AppController.stopTrialExpirationWatcher();
+            if (!AppController.isOnTrial()) return;
+
+            // If we don't have the server-issued expiry yet for this trial
+            // (e.g. right after a fresh login), fetch it once so the popup
+            // is timed off the real 2-minute clock rather than just the
+            // local mock-flow fallback.
+            if (!AppState.trialEndsAt && AppState.jwtToken) {
+                ApiService.apiFetch("/api/auth/me")
+                    .then(r => (r.ok ? r.json() : null))
+                    .then(result => {
+                        const ts = result?.user?.trialEndsAt ? new Date(result.user.trialEndsAt).getTime() : null;
+                        if (ts) {
+                            AppState.trialEndsAt = ts;
+                            localStorage.setItem("fa_trial_ends_at", String(ts));
+                            AppController.checkTrialExpiration();
+                        }
+                    })
+                    .catch(() => { /* fall back to the local timer, if any */ });
+            }
+
+            // Check immediately in case the trial already expired (e.g. the
+            // task pane was reopened after the window elapsed), then keep
+            // polling so it fires the instant the trial ends.
+            AppController.checkTrialExpiration();
+            AppController._trialWatcherId = setInterval(() => {
+                AppController.checkTrialExpiration();
+            }, 1000);
+        },
+
+        stopTrialExpirationWatcher() {
+            if (AppController._trialWatcherId) {
+                clearInterval(AppController._trialWatcherId);
+                AppController._trialWatcherId = null;
             }
         },
 
@@ -3197,7 +3317,7 @@ Office.onReady(() => {
             const handleAddCompanyClick = () => {
                 ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data: ", err));
                 const currentPlan = (AppState.subscriptionPlan && AppState.subscriptionPlan !== 'null') ? AppState.subscriptionPlan : "Basic";
-                const maxAllowed = currentPlan === "Basic" ? 1 : (currentPlan === "Standard" ? 3 : 10);
+                const maxAllowed = getMaxCompaniesForPlan(currentPlan);
                 // Derive the provider from the active dashboard, fall back to quickbooks
                 const provider = AppState.currentProvider || "quickbooks";
 
@@ -3664,9 +3784,15 @@ Office.onReady(() => {
                 AppState.hasSubscription = localStorage.getItem("fa_has_subscription") === "true";
                 AppState.subscriptionId = localStorage.getItem("fa_subscription_id");
                 AppState.subscriptionPlan = (v => (!v || v === 'null' || v === 'undefined') ? null : v)(localStorage.getItem("fa_subscription_plan"));
+                AppState.trialEndsAt = (v => (v ? parseInt(v, 10) : null))(localStorage.getItem("fa_trial_ends_at"));
                 AppState.erpConnected = localStorage.getItem("fa_erp_connected") === "true";
                 AppState.erpType = localStorage.getItem("fa_erp_type");
                 AppState.currentCompanyId = localStorage.getItem("fa_current_company_id") || null;
+
+                // Resume/re-check the trial countdown on reload — if the
+                // 2 minutes already elapsed while the task pane was closed,
+                // this shows the upgrade popup immediately.
+                AppController.startTrialExpirationWatcher();
 
                 DashboardService.render();
 
@@ -3700,6 +3826,16 @@ Office.onReady(() => {
                             }
                             // If dbPlan is empty/missing, do nothing — keep
                             // showing whatever plan was already cached.
+
+                            const dbTrialEndsAt = result?.user?.trialEndsAt ? new Date(result.user.trialEndsAt).getTime() : null;
+                            if (dbTrialEndsAt && dbTrialEndsAt !== AppState.trialEndsAt) {
+                                AppState.trialEndsAt = dbTrialEndsAt;
+                                localStorage.setItem("fa_trial_ends_at", String(dbTrialEndsAt));
+                            }
+                            // Re-run with whatever fresh plan/expiry we just got —
+                            // covers both "just started a real trial" and "trial
+                            // already ended while the task pane was closed".
+                            AppController.startTrialExpirationWatcher();
                         })
                         .catch(() => {
                             // Offline or request failed — keep showing the

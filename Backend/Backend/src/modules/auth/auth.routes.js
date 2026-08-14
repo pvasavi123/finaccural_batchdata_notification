@@ -25,6 +25,7 @@ const { authLimiter } = require('../../core/middleware/rateLimiters');
  * Protected (JWT required):
  *   GET  /api/auth/me
  *   POST /api/auth/update-plan
+ *   POST /api/auth/start-trial
  * ----------------------------------------------------------------
  */
 
@@ -52,5 +53,8 @@ router.post('/logout', controller.logout);
 // Protected endpoints
 router.get('/me', authenticate, controller.getMe);
 router.post('/update-plan', authenticate, validate(schemas.updatePlan), controller.updatePlan);
+// No body to validate — the trial is a fixed plan/duration set server-side
+// from config.TRIAL, not something the client can parameterize.
+router.post('/start-trial', authenticate, controller.startTrial);
 
 module.exports = router;

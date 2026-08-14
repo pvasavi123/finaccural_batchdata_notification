@@ -41,7 +41,8 @@ class QuickbooksController {
             const tier = (req.query.tier || 'pro').toLowerCase();
 
             let maxAllowed = 10;
-            if (tier === 'basic') maxAllowed = 1;
+            if (tier === 'trial') maxAllowed = 1;
+            else if (tier === 'basic') maxAllowed = 1;
             else if (tier === 'standard') maxAllowed = 3;
 
             if (qbCount >= maxAllowed) {
@@ -280,7 +281,8 @@ class QuickbooksController {
                 quickbooks: { connected: 0, remaining: 10 }
             };
 
-            if (plan === 'basic')    stats.maxPerPlatform = 1;
+            if (plan === 'trial')    stats.maxPerPlatform = 1;
+            else if (plan === 'basic')    stats.maxPerPlatform = 1;
             else if (plan === 'standard') stats.maxPerPlatform = 3;
 
             const qbStats = await QuickBooksService.getConnectionStats(mail, plan);

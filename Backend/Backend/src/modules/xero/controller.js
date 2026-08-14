@@ -41,7 +41,8 @@ class XeroController {
             const tier = (req.query.tier || 'pro').toLowerCase();
 
             let maxAllowed = 10;
-            if (tier === 'basic') maxAllowed = 1;
+            if (tier === 'trial') maxAllowed = 1;
+            else if (tier === 'basic') maxAllowed = 1;
             else if (tier === 'standard') maxAllowed = 3;
 
             if (xeroCount >= maxAllowed) {
@@ -123,7 +124,7 @@ class XeroController {
             const activeTenantIds = new Set(existingActive.map(t => t.tenant_id));
 
             // Build the tier label
-            const tierLabel = tier === 'basic' ? 'Basic (1)' : tier === 'standard' ? 'Standard (3)' : 'Pro (10)';
+            const tierLabel = tier === 'trial' ? 'Trial (1)' : tier === 'basic' ? 'Basic (1)' : tier === 'standard' ? 'Standard (3)' : 'Pro (10)';
 
             // Build the company-selection HTML page
             const companyRows = tenants.map(t => {
@@ -691,7 +692,8 @@ class XeroController {
                 xero:       { connected: 0, remaining: 10 }
             };
 
-            if (plan === 'basic')    stats.maxPerPlatform = 1;
+            if (plan === 'trial')    stats.maxPerPlatform = 1;
+            else if (plan === 'basic')    stats.maxPerPlatform = 1;
             else if (plan === 'standard') stats.maxPerPlatform = 3;
 
             const xeroStats = await XeroService.getConnectionStats(mail, plan);
