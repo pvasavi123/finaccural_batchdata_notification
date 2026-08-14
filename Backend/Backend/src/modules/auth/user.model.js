@@ -84,6 +84,11 @@ module.exports = (sequelize) => {
             plan: {
                 type:      DataTypes.STRING(50),
                 allowNull: true
+            },
+
+            trial_ends_at: {
+                type:      DataTypes.DATE,
+                allowNull: true
             }
         },
         {

@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "dev:1": "cross-env PORT=8000 INSTANCE_ID=server-1 nodemon src/server.js",
-"dev:2": "cross-env PORT=8001 INSTANCE_ID=server-2 nodemon src/server.js",
+    "dev:2": "cross-env PORT=8001 INSTANCE_ID=server-2 nodemon src/server.js",
     "dev:all": "concurrently \"npm run dev:1\" \"npm run dev:2\"",
     "test": "jest",
     "test:watch": "jest --watch",

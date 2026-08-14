@@ -80,6 +80,16 @@ module.exports = async (env, options) => {
         template: "./src/commands/commands.html",
         chunks: ["polyfill", "commands"],
       }),
+      new HtmlWebpackPlugin({
+        filename: "trialselect.html",
+        template: "./src/taskpane/trialselect.html",
+        chunks: ["polyfill"],
+      }),
+      new HtmlWebpackPlugin({
+        filename: "accountpicker.html",
+        template: "./src/taskpane/accountpicker.html",
+        chunks: ["polyfill"],
+      }),
     ],
     devServer: {
       headers: {

@@ -25,6 +25,13 @@ module.exports = {
         USER: process.env.DB_USER || 'root',
         PASSWORD: process.env.DB_PASSWORD || '123456'
     },
+    TRIAL: {
+        // How long a brand-new signup's trial lasts, in milliseconds.
+        // Defaults to 2 minutes for local testing; set TRIAL_DURATION_MS
+        // in .env (e.g. 1209600000 for 14 days) for anything real.
+        DURATION_MS:  parseInt(process.env.TRIAL_DURATION_MS, 10) || 2 * 60 * 1000,
+        DEFAULT_PLAN: process.env.TRIAL_DEFAULT_PLAN || 'trial'
+    },
     QB: {
         CLIENT_ID: process.env.QB_CLIENT_ID,
         CLIENT_SECRET: process.env.QB_CLIENT_SECRET,

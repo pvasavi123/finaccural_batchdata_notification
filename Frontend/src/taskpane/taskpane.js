@@ -1237,6 +1237,14 @@ Office.onReady(() => {
          */
         logout() {
             ExcelService.clearMasterData().catch(err => console.error("Error clearing Excel data on logout: ", err));
+
+            const lastEmail = localStorage.getItem("fa_user_email");
+            const lastName = localStorage.getItem("fa_user_name");
+            const lastProvider = localStorage.getItem("fa_user_provider");
+            if (lastEmail) localStorage.setItem("fa_last_user_email", lastEmail);
+            if (lastName) localStorage.setItem("fa_last_user_name", lastName);
+            if (lastProvider) localStorage.setItem("fa_last_user_provider", lastProvider);
+
             AppState.userEmail = null;
             AppState.userName = null;
             AppState.userProvider = null;
@@ -2554,7 +2562,7 @@ Office.onReady(() => {
 
         // ---- Trial Select Dialog ----
         openTrialSelectDialog() {
-            const dialogUrl = window.location.origin + "/assets/trialselect.html";
+            const dialogUrl = window.location.origin + "/trialselect.html";
             let dialog = null;
 
             Office.context.ui.displayDialogAsync(dialogUrl, { height: 60, width: 45, displayInIframe: true }, (asyncResult) => {
@@ -2574,15 +2582,9 @@ Office.onReady(() => {
                                 AuthService._persistSubscription();
                                 DashboardService.render();
                                 ViewRouter.show("Dashboard");
-                                DashboardService.showStatus("Free Trial started successfully!", "success");
-
-                                // Trigger popup after 20 minutes
-                                setTimeout(() => {
-                                    const modal = document.getElementById("trialExpiredModal");
-                                    if (modal) {
-                                        modal.style.display = "flex";
-                                    }
-                              }, 1 * 60 * 1000);
+                                                                DashboardService.showStatus("Free Trial started successfully!", "success");
+                                localStorage.setItem("fa_trial_start", Date.now().toString());
+                                AppController.checkTrialExpiration();
                             } else if (message.type === 'VIEW_PLANS') {
                                 dialog.close();
                                 ViewRouter.show("Plans");
@@ -2604,10 +2606,9 @@ Office.onReady(() => {
             
             const trialStart = parseInt(trialStartStr, 10);
             const now = Date.now();
-            // Checking if 1 minute has passed (for testing purposes, change to 20 * 60 * 1000 for 20 minutes)
             const elapsed = now - trialStart;
             
-            if (elapsed > 1 * 60 * 1000) {
+            if (elapsed > 1 * 60 * 1000) { // 1 minute for testing
                 const modal = document.getElementById("trialExpiredModal");
                 if (modal && modal.style.display === "none") {
                     modal.style.display = "flex";
@@ -2659,7 +2660,9 @@ Office.onReady(() => {
                 const btn = document.getElementById("btnSignIn");
                 if (btn) btn.disabled = true;
                 
-                const dialogUrl = window.location.origin + "/assets/accountpicker.html";
+                const savedName = localStorage.getItem("fa_user_name") || localStorage.getItem("fa_last_user_name") || "";
+                const savedEmail = localStorage.getItem("fa_user_email") || localStorage.getItem("fa_last_user_email") || "";
+                const dialogUrl = window.location.origin + `/accountpicker.html?name=${encodeURIComponent(savedName)}&email=${encodeURIComponent(savedEmail)}`;
                 
                 Office.context.ui.displayDialogAsync(dialogUrl, { height: 50, width: 35, displayInIframe: true }, (asyncResult) => {
                     setTimeout(() => { if (btn) btn.disabled = false; }, 3000);
@@ -2678,6 +2681,14 @@ Office.onReady(() => {
                                     const secondaryContainer = document.getElementById("secondaryAuthContainer");
                                     if (primaryContainer) primaryContainer.style.display = "none";
                                     if (secondaryContainer) secondaryContainer.style.display = "flex";
+                                } else if (message.type === 'USE_EXISTING') {
+                                    dialog.close();
+                                    const provider = localStorage.getItem("fa_user_provider") || localStorage.getItem("fa_last_user_provider") || "google";
+                                    if (provider === "microsoft") {
+                                        AuthService.openMicrosoftPopup();
+                                    } else {
+                                        AuthService.openGooglePopup();
+                                    }
                                 }
                             } catch (e) {
                                 console.error("Error parsing dialog message:", e);

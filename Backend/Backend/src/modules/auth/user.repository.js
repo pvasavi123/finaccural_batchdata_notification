@@ -76,7 +76,7 @@ class UserRepository {
      */
     static async findAll() {
         return await User.findAll({
-            attributes: ['id', 'name', 'email', 'provider', 'role', 'is_active', 'plan', 'created_at'],
+            attributes: ['id', 'name', 'email', 'provider', 'role', 'is_active', 'plan', 'trial_ends_at', 'created_at'],
             order: [['created_at', 'DESC']]
         });
     }

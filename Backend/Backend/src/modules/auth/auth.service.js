@@ -6,6 +6,7 @@ const JwtService       = require('./jwt.service');
 const GoogleService    = require('./google.service');
 const MicrosoftService = require('./microsoft.service');
 const logger           = require('../../core/logger');
+const config           = require('../../core/config');
 const { ValidationError, AuthenticationError } = require('../../core/errors/AppError');
 
 /**
@@ -38,7 +39,22 @@ class AuthService {
             email:    user.email,
             role:     user.role,
             provider: user.provider,
-            plan:     user.plan
+            plan:     user.plan,
+            trialEndsAt: user.trial_ends_at
+        };
+    }
+
+    /**
+     * Fields every brand-new signup gets, regardless of provider:
+     * a default plan and a trial clock starting now.
+     * Centralised here so signup(), handleGoogleCallback(), and
+     * handleMicrosoftCallback() can't drift out of sync on this.
+     * @returns {{ plan: string, trial_ends_at: Date }}
+     */
+    static _newAccountDefaults() {
+        return {
+            plan:          config.TRIAL.DEFAULT_PLAN,
+            trial_ends_at: new Date(Date.now() + config.TRIAL.DURATION_MS)
         };
     }
 
@@ -88,7 +104,8 @@ class AuthService {
             email:         normalised,
             password_hash,
             provider:      'local',
-            role:          'user'
+            role:          'user',
+            ...AuthService._newAccountDefaults()
         });
 
         return {
@@ -189,7 +206,8 @@ class AuthService {
                 email,
                 provider:  'google',
                 google_id: googleId,
-                role:      'user'
+                role:      'user',
+                ...AuthService._newAccountDefaults()
             });
         }
 
@@ -263,7 +281,8 @@ class AuthService {
                 email,
                 provider:     'microsoft',
                 microsoft_id: microsoftId,
-                role:         'user'
+                role:         'user',
+                ...AuthService._newAccountDefaults()
             });
         }
 
