@@ -32,7 +32,7 @@ const login = Joi.object({
 });
 
 const updatePlan = Joi.object({
-    plan: Joi.string().trim().lowercase().valid('basic', 'standard', 'pro').required()
+    plan: Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').required()
 });
 
 const renameConnection = Joi.object({
@@ -43,7 +43,7 @@ const renameConnection = Joi.object({
 const pullMasterDataQuery = Joi.object({
     companyId: Joi.string().trim().max(255).allow('', null),
     platform:  Joi.string().trim().lowercase().valid('quickbooks', 'xero').required(),
-    tier:      Joi.string().trim().lowercase().valid('basic', 'standard', 'pro').default('pro')
+    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
 });
 
 // GET /api/quickbooks/pull-master-data?companyId=...&tier=...
@@ -52,17 +52,17 @@ const pullMasterDataQuery = Joi.object({
 // already implied by which router this is mounted under)
 const moduleMasterDataQuery = Joi.object({
     companyId: Joi.string().trim().max(255).allow('', null),
-    tier:      Joi.string().trim().lowercase().valid('basic', 'standard', 'pro').default('pro')
+    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
 });
 
 // GET /api/connections/stats?plan=...
 const connectionStatsQuery = Joi.object({
-    plan: Joi.string().trim().lowercase().valid('basic', 'standard', 'pro').default('pro')
+    plan: Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
 });
 
 // GET /api/quickbooks/connect?tier=... , GET /api/xero/connect?tier=...
 const erpConnectQuery = Joi.object({
-    tier: Joi.string().trim().lowercase().valid('basic', 'standard', 'pro').default('pro')
+    tier: Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
 }).unknown(true); // OAuth connect URLs may legitimately carry other client-added params
 
 // POST /api/admin/login
