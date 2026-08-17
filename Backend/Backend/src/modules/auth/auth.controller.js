@@ -137,13 +137,14 @@ class AuthController {
             return res.json({
                 success: true,
                 user: {
-                    id:          user.id,
-                    name:        user.name,
-                    email:       user.email,
-                    role:        user.role,
-                    provider:    user.provider,
-                    plan:        user.plan,
-                    trialEndsAt: user.trial_ends_at
+                    id:             user.id,
+                    name:           user.name,
+                    email:          user.email,
+                    role:           user.role,
+                    provider:       user.provider,
+                    plan:           user.plan,
+                    trialEndsAt:    user.trial_ends_at,
+                    subscriptionId: user.id
                 }
             });
         } catch (error) {

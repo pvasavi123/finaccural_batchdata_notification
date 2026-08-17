@@ -14,13 +14,17 @@ module.exports = (sequelize) => {
         'User',
         {
             id: {
-                type:          DataTypes.INTEGER,
-                primaryKey:    true,
-                autoIncrement: true
+                type: DataTypes.STRING(20),
+                primaryKey: true,
+                defaultValue: () => {
+                    const year = new Date().getFullYear();
+                    const randomDigits = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+                    return `FU${year}${randomDigits}`;
+                }
             },
 
             name: {
-                type:      DataTypes.STRING(100),
+                type: DataTypes.STRING(100),
                 allowNull: false,
                 validate: {
                     len: { args: [1, 100], msg: 'Name must be between 1 and 100 characters.' }
@@ -28,9 +32,9 @@ module.exports = (sequelize) => {
             },
 
             email: {
-                type:      DataTypes.STRING(150),
+                type: DataTypes.STRING(150),
                 allowNull: false,
-                unique:    { name: 'users_email_unique', msg: 'Email already registered' },
+                unique: { name: 'users_email_unique', msg: 'Email already registered' },
                 // Database Validation: enforced again here, one layer below
                 // the Joi schema (core/validation/schemas.js) and the regex
                 // check in auth.validation.js, so a row can never be
@@ -44,31 +48,31 @@ module.exports = (sequelize) => {
 
             // Null for OAuth-only users who never set a local password
             password_hash: {
-                type:      DataTypes.STRING,
+                type: DataTypes.STRING,
                 allowNull: true
             },
 
             provider: {
-                type:         DataTypes.ENUM('local', 'google', 'microsoft'),
-                allowNull:    false,
+                type: DataTypes.ENUM('local', 'google', 'microsoft'),
+                allowNull: false,
                 defaultValue: 'local'
             },
 
             // Populated for Google OAuth users
             google_id: {
-                type:      DataTypes.STRING,
+                type: DataTypes.STRING,
                 allowNull: true
             },
 
             // Populated for Microsoft Entra ID (Azure AD) OAuth users
             microsoft_id: {
-                type:      DataTypes.STRING,
+                type: DataTypes.STRING,
                 allowNull: true
             },
 
             role: {
-                type:         DataTypes.STRING(50),
-                allowNull:    false,
+                type: DataTypes.STRING(50),
+                allowNull: false,
                 defaultValue: 'user',
                 validate: {
                     isIn: { args: [['user', 'admin']], msg: "Role must be 'user' or 'admin'." }
@@ -76,26 +80,21 @@ module.exports = (sequelize) => {
             },
 
             is_active: {
-                type:         DataTypes.BOOLEAN,
-                allowNull:    false,
+                type: DataTypes.BOOLEAN,
+                allowNull: false,
                 defaultValue: true
             },
 
             plan: {
-                type:      DataTypes.STRING(50),
-                allowNull: true
-            },
-
-            trial_ends_at: {
-                type:      DataTypes.DATE,
+                type: DataTypes.STRING(50),
                 allowNull: true
             }
         },
         {
-            tableName:  'users',
+            tableName: 'users',
             timestamps: true,
-            createdAt:  'created_at',
-            updatedAt:  'updated_at'
+            createdAt: 'created_at',
+            updatedAt: 'updated_at'
         }
     );
 };

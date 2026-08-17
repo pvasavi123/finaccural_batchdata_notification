@@ -34,13 +34,14 @@ class AuthService {
      */
     static _toUserDTO(user) {
         return {
-            id:       user.id,
-            name:     user.name,
-            email:    user.email,
-            role:     user.role,
-            provider: user.provider,
-            plan:     user.plan,
-            trialEndsAt: user.trial_ends_at
+            id:             user.id,
+            name:           user.name,
+            email:          user.email,
+            role:           user.role,
+            provider:       user.provider,
+            plan:           user.plan,
+            trialEndsAt:    user.trial_ends_at,
+            subscriptionId: user.id
         };
     }
 

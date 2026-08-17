@@ -13,6 +13,8 @@
     <AppDomain>https://www.contoso.com</AppDomain>
     <AppDomain>http://localhost:8000</AppDomain>
     <AppDomain>https://localhost:8000</AppDomain>
+    <AppDomain>http://localhost:8085</AppDomain>
+    <AppDomain>https://localhost:8085</AppDomain>
     <AppDomain>https://appcenter.intuit.com</AppDomain>
     <AppDomain>https://login.xero.com</AppDomain>
     <AppDomain>https://identity.xero.com</AppDomain>

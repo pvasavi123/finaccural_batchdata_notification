@@ -81,7 +81,7 @@ class BillingController {
     // Renders the standalone secure checkout page (opened in a popup).
     // No auth required — user authenticates through the payment flow.
     // ----------------------------------------------------------------
-    checkout = (req, res) => {
+    checkout = async (req, res) => {
         const plan  = req.query.plan  || 'Basic';
         const price = parseInt(req.query.price, 10) || 699;
         const cycle = req.query.cycle || 'Monthly';
@@ -92,6 +92,18 @@ class BillingController {
         // the rendered page's own JS — so the page's own completion request
         // had no way to authenticate and was always rejected with 401.
         const token = req.query.token || '';
+
+        let userId = '';
+        if (email) {
+            try {
+                const user = await UserRepository.findByEmail(email.toLowerCase().trim());
+                if (user) {
+                    userId = user.id;
+                }
+            } catch (err) {
+                logger.error('[Billing] Error looking up user for checkout:', err);
+            }
+        }
 
         return res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -430,7 +442,7 @@ class BillingController {
         type:           'payment_success',
         plan:           selectedPlan,
         billingCycle:   selectedCycle,
-        subscriptionId: 'FA-SUB-' + Math.floor(100000 + Math.random() * 900000)
+        subscriptionId: '${userId}' || ('FA-SUB-' + Math.floor(100000 + Math.random() * 900000))
       };
       if (window.opener) {
         window.opener.postMessage(payload, '*');

@@ -444,7 +444,7 @@ Office.onReady(() => {
     // ============================================================
     const ApiService = {
         // ── Single source-of-truth for the backend base URL ────────────
-        BASE: "http://localhost:8080",
+        BASE: "http://localhost:8085",
 
         /**
          * Centralized error reaction — every call through apiFetch funnels
