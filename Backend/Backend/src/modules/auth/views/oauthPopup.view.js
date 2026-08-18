@@ -12,7 +12,7 @@ function messageTypesFor(provider) {
 }
 
 class OAuthPopupView {
-    static renderAuthSuccess({ provider, email, name, token }) {
+    static renderAuthSuccess({ provider, email, name, token, refreshToken }) {
         const { profile } = messageTypesFor(provider);
         return `<!DOCTYPE html>
 <html>
@@ -28,7 +28,7 @@ class OAuthPopupView {
     <h2 style="margin-top:0;">Authentication Successful</h2>
     <p style="color:#64748b;">Returning you to FinAccrual...</p>
     <script>
-      var payload = { type: '${profile}', email: '${email}', name: '${name}', token: '${token}' };
+      var payload = { type: '${profile}', email: '${email}', name: '${name}', token: '${token}', refreshToken: '${refreshToken || ''}' };
       setTimeout(function() {
         if (window.opener) { window.opener.postMessage(payload, '*'); window.close(); }
         else if (typeof Office !== 'undefined' && Office.context && Office.context.ui) { Office.context.ui.messageParent(JSON.stringify(payload)); }

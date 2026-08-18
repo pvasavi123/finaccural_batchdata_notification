@@ -9,7 +9,7 @@ const QuickBooksTokenRepository = require('./repository');
 const QuickBooksMapper = require('./mapper');
 const logger       = require('../../core/logger');
 const QuickBooksTokenManager = require('./oauth/QuickBooksTokenManager');
-const { ErpSessionExpiredError } = require('../../core/errors/AppError');
+const { AppError, ErpSessionExpiredError } = require('../../core/errors/AppError');
 
 /**
  * QuickBooksService
@@ -528,6 +528,20 @@ class QuickBooksService {
                 };
             } catch (err) {
                 logger.error(`Error pulling QB data for connection ${token.companyId}:`, err.message);
+
+                // Check for QuickBooks Subscription Expired / Suspended (Code 8020)
+                const faultError = err.response?.data?.Fault?.Error?.[0];
+                if (faultError?.code === '8020' || (faultError?.Message && faultError.Message.includes('Subscription is not active'))) {
+                    await QuickBooksToken.update(
+                        { status: 'Disconnected' },
+                        { where: { realm_id: token.companyId } }
+                    );
+                    throw new AppError(
+                        'Your QuickBooks subscription has expired or been suspended. Please log into QuickBooks to update your billing.',
+                        403,
+                        'ERR_QB_SUBSCRIPTION_EXPIRED'
+                    );
+                }
 
                 const isTokenError = err.response?.status === 401
                     || err.statusCode === 401

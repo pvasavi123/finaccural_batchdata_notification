@@ -4,7 +4,7 @@ const config = require('../config');
 const sequelize = new Sequelize(config.DB.NAME, config.DB.USER, config.DB.PASSWORD, {
     host: config.DB.HOST,
     port: config.DB.PORT,
-    dialect: 'postgres',
+    dialect: 'mysql',
     logging: false
 });
 

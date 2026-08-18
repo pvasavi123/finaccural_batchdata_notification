@@ -16,6 +16,7 @@ const { authLimiter } = require('../../core/middleware/rateLimiters');
  * Public:
  *   POST /api/auth/signup
  *   POST /api/auth/login
+ *   POST /api/auth/refresh
  *   GET  /api/auth/google/connect
  *   GET  /api/auth/google/callback
  *   GET  /api/auth/microsoft/connect
@@ -43,6 +44,11 @@ router.get('/google/callback', controller.googleCallback);
 // Microsoft Entra ID (Azure AD) OAuth
 router.get('/microsoft/connect',  controller.microsoftConnect);
 router.get('/microsoft/callback', controller.microsoftCallback);
+
+// Token refresh — public; the whole point is to exchange an opaque
+// refresh token for a new access token when the 15-minute JWT expires.
+// Rate-limited to prevent brute-forcing the DB for valid refresh tokens.
+router.post('/refresh', authLimiter, controller.refresh);
 
 // Session teardown — intentionally NOT behind `authenticate`. The whole
 // point is to let a client with an already-expired/invalid token still

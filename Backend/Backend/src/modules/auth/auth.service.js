@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto           = require('crypto');
 const bcrypt           = require('bcrypt');
 const UserRepository   = require('./user.repository');
 const JwtService       = require('./jwt.service');
@@ -83,16 +84,45 @@ class AuthService {
     }
 
     /**
-     * Generate a JWT whose payload matches the spec in the plan.
+     * Build a signed access JWT for the given user.
      * @param {object} user - Sequelize User instance
-     * @returns {string} signed JWT
+     * @returns {string} signed access JWT (15 min)
      */
     static _buildToken(user) {
-        return JwtService.generateToken({
+        return JwtService.generateAccessToken({
             userId: user.id,
             email:  user.email,
             role:   user.role
         });
+    }
+
+    /**
+     * Generate an access/refresh token pair, persist the refresh token in
+     * the DB, and return both tokens to the caller.
+     * @param {object} user - Sequelize User instance
+     * @returns {Promise<{ accessToken: string, refreshToken: string }>}
+     */
+    static async _buildTokenPair(user) {
+        const accessToken  = JwtService.generateAccessToken({
+            userId: user.id,
+            email:  user.email,
+            role:   user.role
+        });
+        const refreshToken = JwtService.generateRefreshToken();
+
+        const accessTokenExpiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+        const refreshTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        // Persist the new refresh token — overwrites any previous token so
+        // only one refresh token per user is valid at a time.
+        await UserRepository.update(user.id, {
+            access_token:  accessToken,
+            access_token_expires_at: accessTokenExpiresAt,
+            refresh_token: refreshToken,
+            refresh_token_expires_at: refreshTokenExpiresAt
+        });
+
+        return { accessToken, refreshToken };
     }
 
     // ----------------------------------------------------------------
@@ -132,9 +162,12 @@ class AuthService {
             ...AuthService._newAccountDefaults()
         });
 
+        const pair = await AuthService._buildTokenPair(user);
+
         return {
-            token: AuthService._buildToken(user),
-            user:  AuthService._toUserDTO(user)
+            token:        pair.accessToken,
+            refreshToken: pair.refreshToken,
+            user:         AuthService._toUserDTO(user)
         };
     }
 
@@ -170,10 +203,59 @@ class AuthService {
             throw new AuthenticationError('Invalid email or password.');
         }
 
+        const pair = await AuthService._buildTokenPair(user);
+
         return {
-            token: AuthService._buildToken(user),
-            user:  AuthService._toUserDTO(user)
+            token:        pair.accessToken,
+            refreshToken: pair.refreshToken,
+            user:         AuthService._toUserDTO(user)
         };
+    }
+
+    // ----------------------------------------------------------------
+    // Token Refresh / Revoke
+    // ----------------------------------------------------------------
+
+    /**
+     * Validate an opaque refresh token, rotate it, and return a new token
+     * pair. The old refresh token is invalidated on success (rotation).
+     *
+     * @param {string} refreshToken - Opaque token stored client-side.
+     * @returns {Promise<{ token: string, refreshToken: string, user: UserDTO }>}
+     * @throws {AuthenticationError} if the token is not found / user inactive.
+     */
+    static async refreshTokens(refreshToken) {
+        if (!refreshToken) {
+            throw new AuthenticationError('Refresh token is required.');
+        }
+
+        const user = await UserRepository.findByRefreshToken(refreshToken);
+        if (!user || !user.is_active) {
+            throw new AuthenticationError('Invalid or expired refresh token.');
+        }
+
+        // Rotate: generate a new pair and persist it
+        const pair = await AuthService._buildTokenPair(user);
+
+        return {
+            token:        pair.accessToken,
+            refreshToken: pair.refreshToken,
+            user:         AuthService._toUserDTO(user)
+        };
+    }
+
+    /**
+     * Invalidate the stored refresh token on logout.
+     * @param {string} userId
+     * @returns {Promise<void>}
+     */
+    static async revokeRefreshToken(userId) {
+        await UserRepository.update(userId, {
+            access_token:  null,
+            access_token_expires_at: null,
+            refresh_token: null,
+            refresh_token_expires_at: null
+        });
     }
 
     // ----------------------------------------------------------------
@@ -240,8 +322,11 @@ class AuthService {
         const isNewUser = !user.created_at ||
             (new Date() - new Date(user.created_at)) < 5000;
 
+        const pair = await AuthService._buildTokenPair(user);
+
         return {
-            token:     AuthService._buildToken(user),
+            token:     pair.accessToken,
+            refreshToken: pair.refreshToken,
             user:      AuthService._toUserDTO(user),
             isNewUser: user.provider === 'google' && !user.password_hash
         };
@@ -318,8 +403,11 @@ class AuthService {
         const isNewUser = !user.created_at ||
             (new Date() - new Date(user.created_at)) < 5000;
 
+        const pair = await AuthService._buildTokenPair(user);
+
         return {
-            token:     AuthService._buildToken(user),
+            token:     pair.accessToken,
+            refreshToken: pair.refreshToken,
             user:      AuthService._toUserDTO(user),
             isNewUser: user.provider === 'microsoft' && !user.password_hash
         };

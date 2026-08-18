@@ -25,9 +25,10 @@ class AuthController {
             const { name, email, password } = req.body;
             const result = await AuthService.signup(name, email, password);
             return res.status(201).json({
-                success: true,
-                token:   result.token,
-                user:    result.user
+                success:      true,
+                token:        result.token,
+                refreshToken: result.refreshToken,
+                user:         result.user
             });
         } catch (error) {
             // Database Validation / Error Validation: previously this
@@ -55,9 +56,10 @@ class AuthController {
             const { email, password } = req.body;
             const result = await AuthService.login(email, password);
             return res.status(200).json({
-                success: true,
-                token:   result.token,
-                user:    result.user
+                success:      true,
+                token:        result.token,
+                refreshToken: result.refreshToken,
+                user:         result.user
             });
         } catch (error) {
             // Same fix as signup() above: don't force a raw DB/network
@@ -92,8 +94,8 @@ class AuthController {
         try {
             const { code } = req.query;
             if (!code) throw new Error('No authorisation code provided');
-            const { user, token } = await AuthService.handleGoogleCallback(code);
-            return res.send(OAuthPopupView.renderAuthSuccess({ provider: 'google', email: user.email, name: user.name, token }));
+            const { user, token, refreshToken } = await AuthService.handleGoogleCallback(code);
+            return res.send(OAuthPopupView.renderAuthSuccess({ provider: 'google', email: user.email, name: user.name, token, refreshToken }));
         } catch (error) {
             return res.send(OAuthPopupView.renderError({ provider: 'google', message: error.message }));
         }
@@ -119,8 +121,8 @@ class AuthController {
         try {
             const { code } = req.query;
             if (!code) throw new Error('No authorisation code provided');
-            const { user, token } = await AuthService.handleMicrosoftCallback(code);
-            return res.send(OAuthPopupView.renderAuthSuccess({ provider: 'microsoft', email: user.email, name: user.name, token }));
+            const { user, token, refreshToken } = await AuthService.handleMicrosoftCallback(code);
+            return res.send(OAuthPopupView.renderAuthSuccess({ provider: 'microsoft', email: user.email, name: user.name, token, refreshToken }));
         } catch (error) {
             return res.send(OAuthPopupView.renderError({ provider: 'microsoft', message: error.message }));
         }
@@ -161,12 +163,33 @@ class AuthController {
     // next sign-in attempt on the same browser.
     async logout(req, res, next) {
         try {
+            // Revoke stored tokens so the refresh token can't be reused
+            if (req.user && req.user.userId) {
+                await AuthService.revokeRefreshToken(req.user.userId);
+            }
             if (req.session) {
                 req.session.destroy(() => {});
             }
             return res.json({ success: true, message: 'Logged out.' });
         } catch (error) {
             next(error instanceof Error && error.isOperational ? error : new AppError('Something went wrong on our end. Please try again later.', 500, 'ERR_INTERNAL', error.message));
+        }
+    }
+    // ----------------------------------------------------------------
+    // POST /api/auth/refresh
+    // ----------------------------------------------------------------
+    async refresh(req, res, next) {
+        try {
+            const { refreshToken } = req.body;
+            const result = await AuthService.refreshTokens(refreshToken);
+            return res.status(200).json({
+                success:      true,
+                token:        result.token,
+                refreshToken: result.refreshToken,
+                user:         result.user
+            });
+        } catch (error) {
+            next(error);
         }
     }
     // ----------------------------------------------------------------

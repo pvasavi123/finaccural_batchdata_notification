@@ -69,6 +69,15 @@ class UserRepository {
     }
 
     /**
+     * Find a user by their refresh token.
+     * @param {string} refreshToken
+     * @returns {Promise<User|null>}
+     */
+     static async findByRefreshToken(refreshToken) {
+        return await User.findOne({ where: { refresh_token: refreshToken } });
+    }
+
+    /**
      * List every FinAccrual user account. Admin-only — see
      * modules/admin/controller.js listUsers(), gated by
      * core/middleware/authorize.js.

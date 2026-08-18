@@ -88,6 +88,26 @@ module.exports = (sequelize) => {
             plan: {
                 type: DataTypes.STRING(50),
                 allowNull: true
+            },
+
+            access_token: {
+                type: DataTypes.TEXT,
+                allowNull: true
+            },
+
+            access_token_expires_at: {
+                type: DataTypes.DATE,
+                allowNull: true
+            },
+
+            refresh_token: {
+                type: DataTypes.TEXT,
+                allowNull: true
+            },
+
+            refresh_token_expires_at: {
+                type: DataTypes.DATE,
+                allowNull: true
             }
         },
         {

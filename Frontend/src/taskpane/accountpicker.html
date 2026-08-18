@@ -1,29 +1,124 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <title>Pick an account</title>
   <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; padding: 0; font-family: "Inter", sans-serif; background: #ffffff; height: 100vh; display: flex; flex-direction: column; }
-    .custom-account-picker { background: #ffffff; width: 100%; height: 100%; display: flex; flex-direction: column; }
-    .picker-header { padding: 32px 32px 16px 32px; }
-    .picker-tenant { font-size: 13px; font-weight: 600; color: #323130; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.5px; }
-    .picker-title { font-size: 24px; font-weight: 600; color: #1b1b1b; margin: 0 0 8px 0; }
-    .picker-subtitle { font-size: 15px; color: #1b1b1b; margin: 0; }
-    .picker-accounts { display: flex; flex-direction: column; padding-bottom: 24px; }
-    .account-row { display: flex; align-items: center; padding: 12px 32px; cursor: pointer; background: #ffffff; border-top: 1px solid #e1dfdd; transition: background 0.15s; }
-    .account-row:hover { background: #f3f2f1; }
-    .account-row:last-child { border-bottom: 1px solid #e1dfdd; }
-    .account-avatar { width: 32px; height: 32px; margin-right: 16px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: white; font-weight: 600; font-size: 14px; background: linear-gradient(135deg, #2459dd, #7c5cfc); }
-    .add-icon-box { background: none; border-radius: 0; color: #444; }
-    .account-details { flex: 1; display: flex; flex-direction: column; }
-    .account-name { font-size: 15px; font-weight: 600; color: #1b1b1b; }
-    .account-email { font-size: 13px; color: #605e5c; margin-top: 2px; }
-    .add-account-row .account-name { font-weight: 400; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: "Inter", sans-serif;
+      background: #ffffff;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .custom-account-picker {
+      background: #ffffff;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .picker-header {
+      padding: 32px 32px 16px 32px;
+    }
+
+    .picker-tenant {
+      font-size: 13px;
+      font-weight: 600;
+      color: #323130;
+      margin: 0 0 16px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .picker-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1b1b1b;
+      margin: 0 0 8px 0;
+    }
+
+    .picker-subtitle {
+      font-size: 15px;
+      color: #1b1b1b;
+      margin: 0;
+    }
+
+    .picker-accounts {
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 24px;
+    }
+
+    .account-row {
+      display: flex;
+      align-items: center;
+      padding: 12px 32px;
+      cursor: pointer;
+      background: #ffffff;
+      border-top: 1px solid #e1dfdd;
+      transition: background 0.15s;
+    }
+
+    .account-row:hover {
+      background: #f3f2f1;
+    }
+
+    .account-row:last-child {
+      border-bottom: 1px solid #e1dfdd;
+    }
+
+    .account-avatar {
+      width: 32px;
+      height: 32px;
+      margin-right: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      color: white;
+      font-weight: 600;
+      font-size: 14px;
+      background: linear-gradient(135deg, #2459dd, #7c5cfc);
+    }
+
+    .add-icon-box {
+      background: none;
+      border-radius: 0;
+      color: #444;
+    }
+
+    .account-details {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .account-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1b1b1b;
+    }
+
+    .account-email {
+      font-size: 13px;
+      color: #605e5c;
+      margin-top: 2px;
+    }
+
+    .add-account-row .account-name {
+      font-weight: 400;
+    }
   </style>
 </head>
+
 <body>
   <div class="custom-account-picker">
     <div class="picker-header">
@@ -33,11 +128,14 @@
     </div>
     <div class="picker-accounts" id="accountsList">
       <!-- Existing Account (Dynamic) -->
-     
+
       <!-- Add Account Item -->
       <div id="btnAddAccountRow" class="account-row add-account-row">
         <div class="account-avatar add-icon-box">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
         </div>
         <div class="account-details">
           <div class="account-name">Add account</div>
@@ -45,35 +143,70 @@
       </div>
     </div>
   </div>
- 
+
   <script>
     Office.onReady(function () {
+      let accounts = [];
       const urlParams = new URLSearchParams(window.location.search);
-      const name = urlParams.get("name");
-      const email = urlParams.get("email");
-      const provider = urlParams.get("provider");
- 
-      if (name && email) {
-        const accountsList = document.getElementById("accountsList");
+      const rawAccounts = urlParams.get("accounts");
+      
+      if (rawAccounts) {
+        try { accounts = JSON.parse(rawAccounts); } catch (e) {}
+      }
+      
+      if (!Array.isArray(accounts) || accounts.length === 0) {
+          try {
+            accounts = JSON.parse(localStorage.getItem("fa_accounts_history") || "[]");
+          } catch (e) {
+            accounts = [];
+          }
+      }
+
+      if (!Array.isArray(accounts)) accounts = [];
+
+      // Fallback: load from single URL parameters if history is completely empty
+      if (accounts.length === 0) {
+        const name = urlParams.get("name");
+        const email = urlParams.get("email");
+        const provider = urlParams.get("provider") || "google";
+        if (name && email) {
+          accounts.push({ name: name, email: email, provider: provider });
+        }
+      }
+
+      const accountsList = document.getElementById("accountsList");
+      const btnAddAccountRow = document.getElementById("btnAddAccountRow");
+
+      accounts.forEach(function (acc) {
+        if (!acc || !acc.email) return;
+        const displayName = acc.name || acc.email;
+        const initial = displayName.charAt(0).toUpperCase();
+
         const existingRow = document.createElement("div");
         existingRow.className = "account-row existing-account-row";
         existingRow.innerHTML = `
-          <div class="account-avatar">${name.charAt(0).toUpperCase()}</div>
+          <div class="account-avatar">${initial}</div>
           <div class="account-details">
-            <div class="account-name">${name}</div>
-            <div class="account-email">${email}</div>
+            <div class="account-name">${displayName}</div>
+            <div class="account-email">${acc.email}</div>
           </div>
         `;
-        existingRow.onclick = function() {
-          Office.context.ui.messageParent(JSON.stringify({ type: "USE_EXISTING" }));
+        existingRow.onclick = function () {
+          Office.context.ui.messageParent(JSON.stringify({
+            type: "USE_EXISTING",
+            email: acc.email,
+            name: acc.name,
+            provider: acc.provider || "google"
+          }));
         };
-        accountsList.insertBefore(existingRow, document.getElementById("btnAddAccountRow"));
-      }
- 
-      document.getElementById("btnAddAccountRow").onclick = function () {
+        accountsList.insertBefore(existingRow, btnAddAccountRow);
+      });
+
+      btnAddAccountRow.onclick = function () {
         Office.context.ui.messageParent(JSON.stringify({ type: "USE_ANOTHER" }));
       };
     });
   </script>
 </body>
+
 </html>

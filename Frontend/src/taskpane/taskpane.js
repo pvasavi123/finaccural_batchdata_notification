@@ -59,8 +59,12 @@ Office.onReady(() => {
 
         // JWT token — persisted across sessions
         jwtToken: localStorage.getItem("fa_jwt_token") || null,
-
-        // Set true the moment the backend reports ERR_SESSION_EXPIRED.
+        // Opaque refresh token — used to renew the short-lived access JWT
+        refreshToken: localStorage.getItem("fa_refresh_token") || null,
+        // Guard flag: true while an access-token refresh is in progress so
+        // concurrent 401s don't trigger multiple simultaneous refresh calls.
+        _refreshing: false,
+        _refreshQueue: [],
         // While true, ApiService.apiFetch refuses to make further requests
         // (avoids hammering the backend with a storm of repeated 401s)
         // until a fresh token is obtained via login.
@@ -496,6 +500,17 @@ Office.onReady(() => {
                     void provider; // reserved for future provider-specific copy
                     break;
                 }
+                case ERROR_CODES.QB_SUBSCRIPTION_EXPIRED: {
+                    showBanner({
+                        type: "erp",
+                        message: apiErr.message || "Your QuickBooks subscription has expired or been suspended. Please log into QuickBooks to update your billing.",
+                        actionLabel: "Dismiss",
+                        onAction: () => {
+                            hideBanner();
+                        }
+                    });
+                    break;
+                }
                 default:
                     // Not one of the three centrally-handled scenarios —
                     // caller's own catch block is responsible for the UI.
@@ -545,11 +560,55 @@ Office.onReady(() => {
             }
 
             if (!res.ok) {
-                const apiErr = await parseApiError(res.clone());
-                this.handleGlobalApiError(apiErr, { retry });
-                // Rethrow-free: callers keep doing their own `res.ok` /
-                // `res.json()` handling exactly as before. The global
-                // reaction above already fired as a side effect.
+                // ── Auto-refresh on 401 ─────────────────────────────────
+                // Only attempt once (no infinite loop) and only if we have
+                // a stored refresh token. A 401 can mean:
+                //   a) The 15-min access JWT expired  → refresh and retry
+                //   b) The refresh token itself is bad → fall through to
+                //      the existing ERR_SESSION_EXPIRED path.
+                const parsed = await parseApiError(res.clone());
+                if (parsed.status === 401 && AppState.refreshToken && !options._retried) {
+                    try {
+                        // Serialize concurrent 401s — only one refresh call
+                        if (AppState._refreshing) {
+                            // Queue this retry behind the in-flight refresh
+                            await new Promise((resolve, reject) =>
+                                AppState._refreshQueue.push({ resolve, reject })
+                            );
+                            // Refresh completed — retry with the new token
+                            return this.apiFetch(path, { ...options, _retried: true });
+                        }
+                        AppState._refreshing = true;
+                        const refreshRes = await fetch(`${this.BASE}/api/auth/refresh`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ refreshToken: AppState.refreshToken })
+                        });
+                        if (refreshRes.ok) {
+                            const data = await refreshRes.json();
+                            AppState.jwtToken = data.token;
+                            AppState.refreshToken = data.refreshToken;
+                            AppState.sessionExpired = false;
+                            localStorage.setItem("fa_jwt_token", data.token);
+                            localStorage.setItem("fa_refresh_token", data.refreshToken);
+                            // Unblock queued retries
+                            AppState._refreshQueue.forEach(p => p.resolve());
+                            AppState._refreshQueue = [];
+                            AppState._refreshing = false;
+                            return this.apiFetch(path, { ...options, _retried: true });
+                        } else {
+                            // Refresh failed — fall through to session-expired
+                            AppState._refreshQueue.forEach(p => p.reject());
+                            AppState._refreshQueue = [];
+                            AppState._refreshing = false;
+                        }
+                    } catch (_) {
+                        AppState._refreshing = false;
+                        AppState._refreshQueue = [];
+                    }
+                }
+                // ── Normal error path ────────────────────────────────────
+                this.handleGlobalApiError(parsed, { retry });
                 return res;
             }
 
@@ -628,6 +687,9 @@ Office.onReady(() => {
          * @returns {Promise<object>} Map of company, customers, vendors, accounts, classes, locations
          */
         async fetchMasterData(provider, companyId) {
+            // const apiErr = { code: ERROR_CODES.QB_SUBSCRIPTION_EXPIRED, message: "Your QuickBooks subscription has expired" };
+            // ApiService.handleGlobalApiError(apiErr);
+            // throw apiErr;
             const params = new URLSearchParams({
                 companyId: companyId || "",
                 platform: provider || "",
@@ -997,9 +1059,9 @@ Office.onReady(() => {
             }
 
             const newCustomers = Array.isArray(data.customers) ? data.customers.filter(c => c.isNew) : [];
-            const newVendors   = Array.isArray(data.vendors)   ? data.vendors.filter(v => v.isNew)   : [];
-            const newAccounts  = Array.isArray(data.accounts)  ? data.accounts.filter(a => a.isNew)  : [];
-            const newClasses   = Array.isArray(data.classes)   ? data.classes.filter(c => c.isNew)   : [];
+            const newVendors = Array.isArray(data.vendors) ? data.vendors.filter(v => v.isNew) : [];
+            const newAccounts = Array.isArray(data.accounts) ? data.accounts.filter(a => a.isNew) : [];
+            const newClasses = Array.isArray(data.classes) ? data.classes.filter(c => c.isNew) : [];
             const newLocations = Array.isArray(data.locations) ? data.locations.filter(l => l.isNew) : [];
 
             const totalNew = newCustomers.length + newVendors.length + newAccounts.length
@@ -1059,7 +1121,7 @@ Office.onReady(() => {
                 await context.sync();
 
                 const lastUsedRow1Indexed = usedRange.isNullObject ? 1 : (usedRange.rowIndex + usedRange.rowCount);
-                let currentRow = Math.max(2, lastUsedRow1Indexed + 2);
+                let currentRow = Math.max(2, lastUsedRow1Indexed + 1);
 
                 for (const [, group] of orgGroupsMap) {
                     const orgName = group.name;
@@ -1083,7 +1145,7 @@ Office.onReady(() => {
                             a.active !== undefined ? (a.active ? "Active" : "Inactive") : "Active",
                             a.id || a.Id || a.AccountID || ""
                         ]);
-                        await writeRowsInBatches(context, sheet, "D", "L", currentRow, accValues, accValues.map(() => true));
+                        await writeRowsInBatches(context, sheet, "D", "L", currentRow, accValues, accValues.map(() => false));
                     }
 
                     if (classCount > 0) {
@@ -1093,7 +1155,7 @@ Office.onReady(() => {
                             c.id || c.Id || "",
                             c.active !== undefined ? (c.active ? "Active" : "Inactive") : "Active"
                         ]);
-                        await writeRowsInBatches(context, sheet, "N", "Q", currentRow, classValues, classValues.map(() => true));
+                        await writeRowsInBatches(context, sheet, "N", "Q", currentRow, classValues, classValues.map(() => false));
                     }
 
                     if (locCount > 0) {
@@ -1103,12 +1165,12 @@ Office.onReady(() => {
                             l.id || l.Id || "",
                             l.active !== undefined ? (l.active ? "Active" : "Inactive") : "Active"
                         ]);
-                        await writeRowsInBatches(context, sheet, "S", "V", currentRow, locValues, locValues.map(() => true));
+                        await writeRowsInBatches(context, sheet, "S", "V", currentRow, locValues, locValues.map(() => false));
                     }
 
                     if (entityCount > 0) {
                         const entityValues = group.entities.map(e => [orgName, e.name, e.type, e.id, e.status]);
-                        await writeRowsInBatches(context, sheet, "X", "AB", currentRow, entityValues, entityValues.map(() => true));
+                        await writeRowsInBatches(context, sheet, "X", "AB", currentRow, entityValues, entityValues.map(() => false));
                     }
 
                     const rangeToFormat = sheet.getRange(`A${currentRow}:AB${currentRow + maxRows - 1}`);
@@ -1275,6 +1337,27 @@ Office.onReady(() => {
          * @param {string} subscriptionId
          * @param {string} plan
          */
+
+        _saveAccountToHistory(account) {
+            if (!account || !account.email) return;
+            let accounts = [];
+            try {
+                accounts = JSON.parse(localStorage.getItem("fa_accounts_history") || "[]");
+            } catch (e) {
+                accounts = [];
+            }
+            if (!Array.isArray(accounts)) accounts = [];
+
+            accounts = accounts.filter(a => a && a.email && a.email.toLowerCase() !== account.email.toLowerCase());
+            accounts.unshift({
+                name: account.name || account.email,
+                email: account.email,
+                provider: account.provider || "google"
+            });
+            if (accounts.length > 5) accounts = accounts.slice(0, 5);
+            localStorage.setItem("fa_accounts_history", JSON.stringify(accounts));
+        },
+
         handleNewUserAuthed(email, name, provider, subscriptionId, plan, token) {
             AppState.userEmail = email;
             AppState.userName = name;
@@ -1283,21 +1366,30 @@ Office.onReady(() => {
             AppState.subscriptionId = subscriptionId;
             AppState.subscriptionPlan = plan;
 
-            // Persist the JWT token so all subsequent API calls are authenticated
+            // Persist the JWT + refresh token so all subsequent API calls are authenticated
             if (token) {
                 AppState.jwtToken = token;
                 AppState.sessionExpired = false; // fresh token — lift the request block
                 localStorage.setItem("fa_jwt_token", token);
             }
+            if (typeof refreshToken !== "undefined" && refreshToken) {
+                AppState.refreshToken = refreshToken;
+                localStorage.setItem("fa_refresh_token", refreshToken);
+            }
 
             localStorage.setItem("fa_user_email", email);
             localStorage.setItem("fa_user_name", name);
             localStorage.setItem("fa_user_provider", provider);
+            this._saveAccountToHistory({ email, name, provider });
             this._persistSubscription();
 
             DashboardService.render();
             ViewRouter.show("Dashboard");
             DashboardService.showStatus("Login successful.", "success");
+
+            const modal = document.getElementById("trialExpiredModal");
+            if (modal) modal.style.display = "none";
+
             AppController.startTrialExpirationWatcher();
         },
 
@@ -1315,12 +1407,17 @@ Office.onReady(() => {
             localStorage.setItem("fa_user_email", email);
             localStorage.setItem("fa_user_name", name);
             localStorage.setItem("fa_user_provider", provider);
+            this._saveAccountToHistory({ email, name, provider });
 
             // Persist token from popup if provided (avoids a round-trip)
             if (token) {
                 AppState.jwtToken = token;
                 AppState.sessionExpired = false; // fresh token — lift the request block
                 localStorage.setItem("fa_jwt_token", token);
+            }
+            if (typeof refreshToken !== "undefined" && refreshToken) {
+                AppState.refreshToken = refreshToken;
+                localStorage.setItem("fa_refresh_token", refreshToken);
             }
 
             ViewRouter.show("Loading");
@@ -1335,6 +1432,10 @@ Office.onReady(() => {
                     DashboardService.render();
                     ViewRouter.show("Dashboard");
                     DashboardService.showStatus("Login successful.", "success");
+
+                    const modal = document.getElementById("trialExpiredModal");
+                    if (modal) modal.style.display = "none";
+
                     AppController.startTrialExpirationWatcher();
                 } else {
                     // Plan is null or missing — show trial vs subscribe popup
@@ -1508,6 +1609,7 @@ Office.onReady(() => {
             AppState.erpOrgName = null;
             AppState.erpConnectedDate = null;
             AppState.jwtToken = null;  // Clear the JWT token on logout
+            AppState.refreshToken = null; // Clear the refresh token on logout
             // Note: AppState.sessionExpired is deliberately NOT reset here —
             // it's only cleared once a fresh token is obtained via a
             // successful login (see checkSubscription / handleGoogleAuth /
@@ -1521,7 +1623,7 @@ Office.onReady(() => {
                 "fa_has_subscription", "fa_subscription_id", "fa_subscription_plan",
                 "fa_erp_connected", "fa_erp_type", "fa_erp_org", "fa_erp_date",
                 "fa_current_company_id",
-                "fa_last_view", "fa_jwt_token"
+                "fa_last_view", "fa_jwt_token", "fa_refresh_token"
             ].forEach(k => localStorage.removeItem(k));
 
             try {
@@ -2837,7 +2939,7 @@ Office.onReady(() => {
                                     .then((result) => {
                                         const user = result?.user || {};
                                         AppState.hasSubscription = true;
-                                        AppState.subscriptionId = AppState.subscriptionId || ("sub_trial_" + Date.now());
+                                        AppState.subscriptionId = user.subscriptionId || AppState.subscriptionId;
                                         AppState.subscriptionPlan = user.plan || "trial";
                                         AppState.trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt).getTime() : null;
                                         if (AppState.trialEndsAt) {
@@ -2902,12 +3004,50 @@ Office.onReady(() => {
             if (!endTs) return;
 
             if (Date.now() >= endTs) {
-                const modal = document.getElementById("trialExpiredModal");
-                if (modal && modal.style.display !== "flex") {
-                    modal.style.display = "flex";
-                }
-                // Trial is over — nothing left to watch for.
+                // Trial local time is up. Stop watcher and check real backend status
                 AppController.stopTrialExpirationWatcher();
+
+                ApiService.apiFetch("/api/auth/me")
+                    .then(r => (r.ok ? r.json() : null))
+                    .then(result => {
+                        if (result && result.user) {
+                            const u = result.user;
+                            const currentPlan = (u.plan || "").toLowerCase();
+                            const actualEndTs = u.trialEndsAt ? new Date(u.trialEndsAt).getTime() : null;
+                            const isExpired = currentPlan === 'expired' || (currentPlan.includes('trial') && actualEndTs && Date.now() >= actualEndTs);
+
+                            if (isExpired) {
+                                AppState.subscriptionPlan = u.plan;
+                                localStorage.setItem("fa_subscription_plan", u.plan);
+
+                                const modal = document.getElementById("trialExpiredModal");
+                                if (modal && modal.style.display !== "flex") {
+                                    modal.style.display = "flex";
+                                    ExcelService.clearMasterData().catch(e => console.error("Failed to clear master data on trial expiry", e));
+                                }
+                            } else {
+                                // Backend confirms still active (e.g. upgraded on another device)
+                                AppState.subscriptionPlan = u.plan;
+                                localStorage.setItem("fa_subscription_plan", u.plan);
+                                if (actualEndTs) {
+                                    AppState.trialEndsAt = actualEndTs;
+                                    localStorage.setItem("fa_trial_ends_at", String(actualEndTs));
+                                }
+                                DashboardService.render();
+                                AppController.startTrialExpirationWatcher();
+                            }
+                        } else {
+                            throw new Error("No user in response");
+                        }
+                    })
+                    .catch(e => {
+                        console.error("Failed to check subscription status on trial expiry", e);
+                        const modal = document.getElementById("trialExpiredModal");
+                        if (modal && modal.style.display !== "flex") {
+                            modal.style.display = "flex";
+                            ExcelService.clearMasterData().catch(err => console.error(err));
+                        }
+                    });
             }
         },
 
@@ -2996,14 +3136,15 @@ Office.onReady(() => {
             document.getElementById("btnSignIn")?.addEventListener("click", () => {
                 const btn = document.getElementById("btnSignIn");
                 if (btn) btn.disabled = true;
-                
+
                 const savedName = localStorage.getItem("fa_user_name") || localStorage.getItem("fa_last_user_name") || "";
                 const savedEmail = localStorage.getItem("fa_user_email") || localStorage.getItem("fa_last_user_email") || "";
-                const dialogUrl = window.location.origin + `/accountpicker.html?name=${encodeURIComponent(savedName)}&email=${encodeURIComponent(savedEmail)}`;
-                
+                const rawAccounts = localStorage.getItem("fa_accounts_history") || "[]";
+                const dialogUrl = window.location.origin + `/accountpicker.html?name=${encodeURIComponent(savedName)}&email=${encodeURIComponent(savedEmail)}&accounts=${encodeURIComponent(rawAccounts)}`;
+
                 Office.context.ui.displayDialogAsync(dialogUrl, { height: 50, width: 35, displayInIframe: true }, (asyncResult) => {
                     setTimeout(() => { if (btn) btn.disabled = false; }, 3000);
-                    
+
                     if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                         console.error("Failed to open dialog:", asyncResult.error.message);
                     } else {
@@ -3020,16 +3161,12 @@ Office.onReady(() => {
                                     if (secondaryContainer) secondaryContainer.style.display = "flex";
                                 } else if (message.type === 'USE_EXISTING') {
                                     dialog.close();
-                                    const provider = localStorage.getItem("fa_user_provider") || localStorage.getItem("fa_last_user_provider") || "google";
-                                    // Pass the remembered email through as a login hint so
-                                    // Google/Microsoft skip their own account-chooser screen
-                                    // and go straight to that account — the same "already
-                                    // connected, just show it" feel as re-opening an existing
-                                    // QuickBooks/Xero connection instead of reconnecting.
+                                    targetEmail = message.email || savedEmail;
+                                    const provider = message.provider || localStorage.getItem("fa_user_provider") || "google";
                                     if (provider === "microsoft") {
-                                        AuthService.openMicrosoftPopup(savedEmail || undefined);
+                                        AuthService.openMicrosoftPopup(targetEmail || undefined);
                                     } else {
-                                        AuthService.openGooglePopup(savedEmail || undefined);
+                                        AuthService.openGooglePopup(targetEmail || undefined);
                                     }
                                 }
                             } catch (e) {
@@ -3102,7 +3239,17 @@ Office.onReady(() => {
 
             // Back button
             document.getElementById("btnPlansBack")?.addEventListener("click", () => {
-                if (AppState.hasSubscription) {
+                const currentPlan = (AppState.subscriptionPlan || "").toLowerCase();
+                const actualEndTs = AppState.trialEndsAt;
+                const isExpired = currentPlan === 'expired' || (currentPlan.includes('trial') && actualEndTs && Date.now() >= actualEndTs);
+
+                if (isExpired) {
+                    const modal = document.getElementById("trialExpiredModal");
+                    if (modal && modal.style.display !== "flex") {
+                        modal.style.display = "flex";
+                    }
+                    ViewRouter.show("Dashboard");
+                } else if (AppState.hasSubscription) {
                     ViewRouter.show("Dashboard");
                 } else {
                     ViewRouter.show("Welcome");
@@ -3794,6 +3941,16 @@ Office.onReady(() => {
                 // this shows the upgrade popup immediately.
                 AppController.startTrialExpirationWatcher();
 
+                // Check if we are already locally expired to pop the modal immediately before rendering old UI
+                const isExpiredLocally = AppState.trialEndsAt && Date.now() >= AppState.trialEndsAt && (AppState.subscriptionPlan || "").toLowerCase().includes("trial");
+                if (isExpiredLocally || (AppState.subscriptionPlan || "").toLowerCase() === "expired") {
+                    const modal = document.getElementById("trialExpiredModal");
+                    if (modal && modal.style.display !== "flex") {
+                        modal.style.display = "flex";
+                        ExcelService.clearMasterData().catch(e => console.error(e));
+                    }
+                }
+
                 DashboardService.render();
 
                 const lastView = localStorage.getItem("fa_last_view");
@@ -3832,6 +3989,23 @@ Office.onReady(() => {
                                 AppState.trialEndsAt = dbTrialEndsAt;
                                 localStorage.setItem("fa_trial_ends_at", String(dbTrialEndsAt));
                             }
+
+                            // Check expiration explicitly off the backend source of truth
+                            const currentPlan = (AppState.subscriptionPlan || "").toLowerCase();
+                            const isExpired = currentPlan === 'expired' || (currentPlan.includes('trial') && AppState.trialEndsAt && Date.now() >= AppState.trialEndsAt);
+
+                            if (isExpired) {
+                                const modal = document.getElementById("trialExpiredModal");
+                                if (modal && modal.style.display !== "flex") {
+                                    modal.style.display = "flex";
+                                    ExcelService.clearMasterData().catch(e => console.error(e));
+                                }
+                            } else {
+                                // If they paid and are now active, ensure modal is hidden
+                                const modal = document.getElementById("trialExpiredModal");
+                                if (modal) modal.style.display = "none";
+                            }
+
                             // Re-run with whatever fresh plan/expiry we just got —
                             // covers both "just started a real trial" and "trial
                             // already ended while the task pane was closed".

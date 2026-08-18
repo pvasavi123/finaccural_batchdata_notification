@@ -18,6 +18,7 @@ export const ERROR_CODES = {
     SESSION_EXPIRED:      "ERR_SESSION_EXPIRED",
     ERP_SESSION_EXPIRED:  "ERR_ERP_SESSION_EXPIRED",
     ERP_REFRESH_FAILED:   "ERR_ERP_REFRESH_FAILED",
+    QB_SUBSCRIPTION_EXPIRED: "ERR_QB_SUBSCRIPTION_EXPIRED",
     VALIDATION:           "ERR_VALIDATION",
     UNAUTHORIZED:         "ERR_UNAUTHORIZED",
     FORBIDDEN:            "ERR_FORBIDDEN",
@@ -37,6 +38,8 @@ export const ERROR_MESSAGES = {
         "Your QuickBooks/Xero session has expired. Please reconnect.",
     [ERROR_CODES.ERP_REFRESH_FAILED]:
         "Could not reach QuickBooks/Xero right now. Please try again shortly.",
+    [ERROR_CODES.QB_SUBSCRIPTION_EXPIRED]:
+        "Your QuickBooks subscription has expired or been suspended. Please log into QuickBooks to update your billing.",
     [ERROR_CODES.VALIDATION]:
         "That request looks incomplete. Please check the form and try again.",
     [ERROR_CODES.UNAUTHORIZED]:
