@@ -14,12 +14,12 @@ module.exports = (sequelize) => {
         'User',
         {
             id: {
-                type: DataTypes.STRING(20),
+                type: DataTypes.STRING(13),
                 primaryKey: true,
                 defaultValue: () => {
                     const year = new Date().getFullYear();
-                    const randomDigits = Math.floor(1000000000 + Math.random() * 9000000000).toString();
-                    return `FU${year}${randomDigits}`;
+                    const randomDigits = Math.floor(10000 + Math.random() * 90000).toString(); // 5 digits
+                    return `FIN${year}${randomDigits}`;
                 }
             },
 

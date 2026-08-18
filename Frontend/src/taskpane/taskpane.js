@@ -3161,12 +3161,20 @@ Office.onReady(() => {
                                     if (secondaryContainer) secondaryContainer.style.display = "flex";
                                 } else if (message.type === 'USE_EXISTING') {
                                     dialog.close();
-                                    targetEmail = message.email || savedEmail;
+                                    const targetEmail = message.email || savedEmail;
                                     const provider = message.provider || localStorage.getItem("fa_user_provider") || "google";
-                                    if (provider === "microsoft") {
-                                        AuthService.openMicrosoftPopup(targetEmail || undefined);
+                                    
+                                    const currentEmail = localStorage.getItem("fa_user_email");
+                                    const currentToken = localStorage.getItem("fa_jwt_token");
+
+                                    if (targetEmail && targetEmail === currentEmail && currentToken) {
+                                        AppController.handleReturningUser(targetEmail, message.name || localStorage.getItem("fa_user_name"), provider, currentToken);
                                     } else {
-                                        AuthService.openGooglePopup(targetEmail || undefined);
+                                        if (provider === "microsoft") {
+                                            AuthService.openMicrosoftPopup(targetEmail || undefined);
+                                        } else {
+                                            AuthService.openGooglePopup(targetEmail || undefined);
+                                        }
                                     }
                                 }
                             } catch (e) {
