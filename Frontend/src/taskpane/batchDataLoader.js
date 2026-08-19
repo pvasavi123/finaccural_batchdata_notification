@@ -1,6 +1,14 @@
 const DEFAULT_BATCH_SIZE = 100;
 const DEFAULT_WRITE_BATCH_SIZE = 20;
 
+/**
+ * Batch size for the *manual* Refresh workflow (see the manual batch
+ * queue helpers below) — every Refresh click writes at most this many
+ * records to the sheet, regardless of how many new/updated records the
+ * backend actually returned in one pull.
+ */
+export const MANUAL_REFRESH_BATCH_SIZE = 10;
+
 // Background fill applied to rows flagged as newly added since the last
 // Master Data Pull. Previously existing rows are left with the default
 // (no fill) background.
@@ -284,4 +292,132 @@ export async function fetchAllRecordsAndWriteToExcel(options = {}) {
   }
 
   return allData.length;
+}
+
+// ============================================================
+// Manual (click-driven) batch refresh queue
+// ============================================================
+//
+// "Pull Master Data" and "Refresh Schedule" are two triggers for the
+// *same* sequential batch loader: whichever one is clicked, it fetches
+// (or resumes) the current master-data set and writes the next
+// MANUAL_REFRESH_BATCH_SIZE records to the sheet, then advances the
+// shared position by that many records — same role as an `FA_NextRowIndex`
+// counter in a VBA workbook. The queue below is that shared position: it
+// remembers "how far through the current pull did we get" so the *next*
+// click — Pull or Refresh, either one — resumes from there instead of
+// re-writing (or skipping) records.
+//
+// The two buttons deliberately share ONE queue per provider/company
+// (there is no separate "pull" vs "refresh" position). Clicking either
+// button must never rewind that shared position — the position only
+// resets when the current queue is fully drained (a brand-new pull
+// cycle naturally starts back at record 1) or when the caller explicitly
+// clears it (e.g. disconnecting/switching company). Keeping a single
+// queue is what guarantees "Pull -> 1-10, Refresh -> 11-20, Pull ->
+// 21-30, ..." instead of each button silently restarting the other's
+// progress.
+//
+// Position is kept in localStorage rather than anywhere in the workbook
+// itself, matching how the rest of this add-in already persists
+// UI/session state across taskpane reloads (see DashboardService's
+// STEP_STORAGE_KEY in taskpane.js) — the worksheet's own data is never
+// touched to store this bookkeeping, so "keep existing Excel data
+// unchanged" holds even for the position marker itself.
+
+const MANUAL_QUEUE_STORAGE_KEY = "fa_manual_batch_queue";
+
+function manualQueueKey(provider, companyId) {
+  return `${provider || "unknown"}::${companyId || "unknown"}`;
+}
+
+function loadAllManualQueues() {
+  try {
+    const raw = localStorage.getItem(MANUAL_QUEUE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveAllManualQueues(all) {
+  try {
+    localStorage.setItem(MANUAL_QUEUE_STORAGE_KEY, JSON.stringify(all));
+  } catch (_) {
+    // Storage full/unavailable — the current batch position just won't
+    // survive a taskpane reload; this click's own progress still works.
+  }
+}
+
+/**
+ * Reads the shared Pull/Refresh batch position for a provider/company —
+ * equivalent to reading `FA_NextRowIndex`. Both buttons call this same
+ * getter, so whichever one was clicked last, the other picks up from
+ * exactly where it left off.
+ * @param {string} provider
+ * @param {string} companyId
+ * @returns {{records: any[], nextIndex: number, total: number}|null}
+ */
+export function getManualBatchQueue(provider, companyId) {
+  const all = loadAllManualQueues();
+  return all[manualQueueKey(provider, companyId)] || null;
+}
+
+/**
+ * Persists the shared Pull/Refresh batch position — equivalent to
+ * writing back an updated `FA_NextRowIndex`. Both buttons call this same
+ * setter after appending their batch, so the position they leave behind
+ * is visible to the other button's next click too.
+ * @param {string} provider
+ * @param {string} companyId
+ * @param {{records: any[], nextIndex: number, total: number}} queue
+ */
+export function setManualBatchQueue(provider, companyId, queue) {
+  const all = loadAllManualQueues();
+  all[manualQueueKey(provider, companyId)] = queue;
+  saveAllManualQueues(all);
+}
+
+/**
+ * Drops the shared stored batch position for a provider/company — call
+ * this once the queue is fully drained (the natural end of a pull
+ * cycle, so the next click starts a fresh cycle back at record 1), or
+ * when the underlying data it was sliced from is no longer valid (e.g.
+ * disconnecting or switching company). Neither Pull Master Data nor
+ * Refresh should call this just because *it* was the button clicked —
+ * only when the shared queue itself is actually finished or invalidated.
+ * @param {string} provider
+ * @param {string} companyId
+ */
+export function clearManualBatchQueue(provider, companyId) {
+  const all = loadAllManualQueues();
+  delete all[manualQueueKey(provider, companyId)];
+  saveAllManualQueues(all);
+}
+
+/**
+ * Slices the next up-to-`batchSize` not-yet-written records off a manual
+ * refresh queue. Pure function — does not touch storage; callers persist
+ * (or clear) the queue themselves based on the returned `isDone` flag.
+ *
+ * @param {any[]} records - full ordered list discovered by the last pull
+ * @param {number} nextIndex - how many records have already been written
+ * @param {number} [batchSize=MANUAL_REFRESH_BATCH_SIZE]
+ * @returns {{batch: any[], nextIndex: number, isDone: boolean, total: number, batchStart: number, batchEnd: number}}
+ */
+export function takeNextManualBatch(records, nextIndex, batchSize = MANUAL_REFRESH_BATCH_SIZE) {
+  const list = Array.isArray(records) ? records : [];
+  const start = Math.max(0, Number.isInteger(nextIndex) ? nextIndex : 0);
+  const batch = list.slice(start, start + batchSize);
+
+  return {
+    batch,
+    nextIndex: start + batch.length,
+    isDone: start + batch.length >= list.length,
+    total: list.length,
+    // 1-indexed, for "rows 101-200 of 437" style progress messaging.
+    batchStart: list.length === 0 ? 0 : start + 1,
+    batchEnd: start + batch.length
+  };
 }

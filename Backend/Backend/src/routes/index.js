@@ -40,6 +40,9 @@ try {
  
 // ── Legacy / compatibility ────────────────────────────────────────
 const adminRoutes = require('../modules/admin/routes');
+
+// ── Per-user notification history ─────────────────────────────────
+const notificationsRoutes = require('../modules/notifications/routes');
  
 const { sequelize } = require('../core/database');
 const redisClient = require('../core/redis');
@@ -84,7 +87,12 @@ if (xeroRoutes) {
 }
  
 router.use('/admin', adminRoutes);
- 
+
+// GET/POST /api/notifications, PATCH /api/notifications/mark-read,
+// DELETE /api/notifications — all JWT-protected and scoped to
+// req.user.userId inside notifications/routes.js + controller.js.
+router.use('/notifications', notificationsRoutes);
+
 const authController = require('../modules/auth/auth.controller');
  
 // Backward-compat aliases for OAuth providers

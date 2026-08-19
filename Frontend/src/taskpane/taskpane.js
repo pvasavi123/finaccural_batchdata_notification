@@ -16,6 +16,13 @@
 
 import { writeRowsInBatches } from "./batchDataLoader.js";
 import {
+    MANUAL_REFRESH_BATCH_SIZE,
+    getManualBatchQueue,
+    setManualBatchQueue,
+    clearManualBatchQueue,
+    takeNextManualBatch
+} from "./batchDataLoader.js";
+import {
     ERROR_CODES,
     ApiError,
     parseApiError,
@@ -126,9 +133,16 @@ Office.onReady(() => {
     // NOTIFICATION SERVICE — Bell icon + drawer notification history
     // ============================================================
     const NotificationService = {
-        STORAGE_KEY: "fa_notifications",
         MAX_ITEMS: 50,
         _lastNotif: null,
+
+        // In-memory cache of the logged-in user's notification history,
+        // as last fetched from the backend (GET /api/notifications). The
+        // backend is now the source of truth — this cache just avoids an
+        // API round-trip on every renderBadge()/renderDrawer() call.
+        // Populated by init() on load and kept in sync by every
+        // add()/markAllRead()/clearAll() mutation.
+        _cache: [],
 
         /**
          * Normalizes a provider tag to "quickbooks" | "xero" | null.
@@ -159,23 +173,67 @@ Office.onReady(() => {
             return list.filter(n => !n.provider || n.provider === ctx);
         },
 
-        /** @returns {Array<{id:string,type:'success'|'error',message:string,detail:string,provider:('quickbooks'|'xero'|null),timestamp:string,read:boolean}>} */
-        _load() {
-            try {
-                const raw = localStorage.getItem(this.STORAGE_KEY);
-                const parsed = raw ? JSON.parse(raw) : [];
-                return Array.isArray(parsed) ? parsed : [];
-            } catch (_) {
-                return [];
-            }
+        /**
+         * Maps a backend notification row (modules/notifications/model —
+         * id, userId, type, message, detail, provider, read, createdAt) to
+         * the shape the rest of this service already expects.
+         * @returns {{id:string,type:'success'|'error',message:string,detail:string,provider:('quickbooks'|'xero'|null),timestamp:string,read:boolean}}
+         */
+        _mapFromBackend(row) {
+            return {
+                id: row.id,
+                type: row.type === "error" ? "error" : "success",
+                message: row.message || "",
+                detail: row.detail || "",
+                provider: this._normalizeProvider(row.provider),
+                timestamp: row.createdAt || row.created_at || new Date().toISOString(),
+                read: !!row.read
+            };
         },
 
-        _save(list) {
+        /**
+         * Fetches the logged-in user's full notification history from the
+         * backend (GET /api/notifications, newest first) and refreshes the
+         * in-memory cache. Failures (offline, logged out, etc.) are
+         * swallowed — ApiService.apiFetch already surfaces the global
+         * offline/session banners, and the bell/drawer just keep showing
+         * whatever was last cached rather than throwing.
+         * @returns {Promise<Array>}
+         */
+        async _fetchFromBackend() {
             try {
-                localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list));
+                const res = await ApiService.apiFetch("/api/notifications");
+                if (!res.ok) return this._cache;
+                const data = await res.json();
+                const rows = Array.isArray(data.notifications) ? data.notifications : [];
+                this._cache = rows.map(r => this._mapFromBackend(r));
             } catch (_) {
-                // Storage full/unavailable — notifications just won't persist
-                // across a refresh, but the app keeps working.
+                // Network/parse failure — keep whatever was cached before.
+            }
+            return this._cache;
+        },
+
+        /**
+         * Creates a notification server-side.
+         * @returns {Promise<object|null>} the created row, or null on failure
+         */
+        async _postToBackend(type, message, detail, provider) {
+            try {
+                const res = await ApiService.apiFetch("/api/notifications", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        type,
+                        message,
+                        detail: detail ? String(detail) : undefined,
+                        provider: provider || undefined
+                    })
+                });
+                if (!res.ok) return null;
+                const data = await res.json();
+                return data.notification || null;
+            } catch (_) {
+                return null;
             }
         },
 
@@ -237,42 +295,50 @@ Office.onReady(() => {
             }
             this._lastNotif = { message, type: normalizedType, provider: normalizedProvider, at: now };
 
-            const list = this._load();
-            list.unshift({
-                id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                type: normalizedType,
-                message: String(message),
-                detail: detail ? String(detail) : "",
-                provider: normalizedProvider,
-                timestamp: new Date().toISOString(),
-                read: false
-            });
-            if (list.length > this.MAX_ITEMS) list.length = this.MAX_ITEMS;
-            this._save(list);
-
             // Only surface it (toast + badge/drawer refresh) if it's global
             // or matches the ERP the user is currently on — a QuickBooks
             // notification must never appear while on Xero, and vice versa.
             const currentCtx = (typeof AppState !== "undefined" && AppState.currentProvider) || null;
             const isVisibleNow = !normalizedProvider || normalizedProvider === currentCtx;
-            if (!isVisibleNow) {
-                return;
-            }
 
             // Immediate feedback — always, regardless of whether the drawer
-            // is open or the bell has ever been clicked.
-            this.showToast(message, normalizedType, detail);
-
-            const drawer = document.getElementById("notifDrawer");
-            if (drawer && drawer.style.display !== "none") {
-                // Drawer is open — the new notification is on screen, so
-                // treat it as read immediately instead of leaving a stray
-                // unread badge behind an already-open drawer.
-                this.markAllRead();
-                this.renderDrawer();
-            } else {
-                this.renderBadge();
+            // is open or the bell has ever been clicked, and regardless of
+            // the backend round-trip below (toast display is local-only and
+            // must never wait on the network).
+            if (isVisibleNow) {
+                this.showToast(message, normalizedType, detail);
             }
+
+            // Persist to the backend. add() itself stays synchronous/
+            // non-blocking for callers (same contract every existing call
+            // site already relies on) — the cache + badge/drawer refresh
+            // just land a beat after the toast once the POST resolves.
+            this._postToBackend(normalizedType, message, detail, normalizedProvider).then(row => {
+                const entry = row ? this._mapFromBackend(row) : {
+                    id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                    type: normalizedType,
+                    message: String(message),
+                    detail: detail ? String(detail) : "",
+                    provider: normalizedProvider,
+                    timestamp: new Date().toISOString(),
+                    read: false
+                };
+                this._cache.unshift(entry);
+                if (this._cache.length > this.MAX_ITEMS) this._cache.length = this.MAX_ITEMS;
+
+                if (!isVisibleNow) return;
+
+                const drawer = document.getElementById("notifDrawer");
+                if (drawer && drawer.style.display !== "none") {
+                    // Drawer is open — the new notification is on screen, so
+                    // treat it as read immediately instead of leaving a stray
+                    // unread badge behind an already-open drawer.
+                    this.markAllRead();
+                    this.renderDrawer();
+                } else {
+                    this.renderBadge();
+                }
+            });
         },
 
         /**
@@ -326,38 +392,72 @@ Office.onReady(() => {
             }
         },
 
-        /** Notifications visible right now — global entries plus the active provider's. */
+        /** Notifications visible right now — global entries plus the active provider's. Reads the in-memory cache (see _fetchFromBackend). */
         getAll() {
-            return this._forCurrentContext(this._load());
+            return this._forCurrentContext(this._cache);
         },
 
         getUnreadCount() {
-            return this._forCurrentContext(this._load()).filter(n => !n.read).length;
+            return this._forCurrentContext(this._cache).filter(n => !n.read).length;
         },
 
         /**
          * Marks read only the notifications currently visible (global +
          * active provider) — a QuickBooks notification the user hasn't
          * seen yet (because they're on Xero) stays unread until they
-         * actually switch to QuickBooks and see it.
+         * actually switch to QuickBooks and see it. Updates the local
+         * cache immediately (so the badge clears without waiting on the
+         * network) and fires the PATCH in the background.
          */
         markAllRead() {
-            const list = this._load();
             const ctx = (typeof AppState !== "undefined" && AppState.currentProvider) || null;
-            let changed = false;
-            list.forEach(n => {
+            const ids = [];
+            this._cache.forEach(n => {
                 if (!n.read && (!n.provider || n.provider === ctx)) {
                     n.read = true;
-                    changed = true;
+                    ids.push(n.id);
                 }
             });
-            if (changed) this._save(list);
             this.renderBadge();
+
+            if (!ids.length) return;
+            ApiService.apiFetch("/api/notifications/mark-read", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ids })
+            }).catch(() => {
+                // Best-effort — a later _fetchFromBackend() resync (e.g. the
+                // next bell open after a taskpane reload) corrects any drift.
+            });
         },
 
-        /** Permanently deletes every notification from storage. */
-        clearAll() {
-            localStorage.removeItem(this.STORAGE_KEY);
+        /**
+         * Permanently deletes every notification (all providers) for the
+         * logged-in user — backend first, then cache.
+         *
+         * Deliberately NOT optimistic: apiFetch() resolves normally (not a
+         * rejected promise) for a non-2xx response — a bare `.catch()`
+         * around the DELETE call would never fire on e.g. a 401/500, so a
+         * failed delete would silently look successful client-side while
+         * the rows stayed in the DB and reappeared for this user on the
+         * next _fetchFromBackend() (next login/reload). Checking res.ok
+         * here and only clearing the cache once the backend confirms the
+         * delete is what actually fixes that "Clear All doesn't clear"
+         * case, instead of just hiding it for the rest of this session.
+         */
+        async clearAll() {
+            try {
+                const res = await ApiService.apiFetch("/api/notifications", { method: "DELETE" });
+                if (!res.ok) {
+                    this.showToast("Couldn't clear notifications. Please try again.", "error");
+                    return;
+                }
+            } catch (_) {
+                this.showToast("Couldn't clear notifications. Please try again.", "error");
+                return;
+            }
+
+            this._cache = [];
             this.renderBadge();
             this.renderDrawer();
         },
@@ -399,9 +499,18 @@ Office.onReady(() => {
             }).join("");
         },
 
-        /** Wires up the bell button, drawer, and Clear All. Call once on init. */
-        init() {
+        /** Wires up the bell button, drawer, and Clear All, then loads notification history from the backend. Call once on init. */
+        async init() {
             this.renderBadge();
+
+            // The notification history now lives server-side, scoped per
+            // user (see modules/notifications). Drop any leftover
+            // `fa_notifications` data from before this migration so it can
+            // never leak between different users signed into the same
+            // browser — it's simply ignored/cleared on first login.
+            try {
+                localStorage.removeItem("fa_notifications");
+            } catch (_) { /* ignore */ }
 
             const drawer = () => document.getElementById("notifDrawer");
 
@@ -440,6 +549,12 @@ Office.onReady(() => {
                 const el = drawer();
                 if (el) el.style.display = "none";
             });
+
+            // Load this user's notification history from the backend and
+            // render the real badge count. Buttons above are already wired
+            // and usable while this is in flight.
+            await this._fetchFromBackend();
+            this.renderBadge();
         }
     };
 
@@ -448,7 +563,7 @@ Office.onReady(() => {
     // ============================================================
     const ApiService = {
         // ── Single source-of-truth for the backend base URL ────────────
-        BASE: "http://localhost:8085",
+        BASE: "http://localhost:8000",
 
         /**
          * Centralized error reaction — every call through apiFetch funnels
@@ -819,6 +934,68 @@ Office.onReady(() => {
         return sections.reduce((total, list) => (Array.isArray(list) ? total + list.length : total), 0);
     }
 
+    /**
+     * Flattens a Master Data Pull response into a single ordered queue of
+     * strictly-new (isNew) records, each tagged with which section it
+     * belongs to (account/class/location/customer/vendor) so a later
+     * slice of this list can still be grouped and written to the right
+     * columns — see ExcelService.appendManualBatch.
+     *
+     * NOT currently called by the UI — Refresh Schedule now pulls and
+     * batches the FULL master data set via flattenAllMasterDataRecords,
+     * same as Pull Master Data. Kept alongside ExcelService.
+     * appendNewMasterData (the only other caller) as a self-contained
+     * isNew-only utility in case an incremental refresh mode is wanted
+     * again later.
+     *
+     * @param {object} data - Master Data Pull response
+     * @returns {{category: "account"|"class"|"location"|"customer"|"vendor", record: object}[]}
+     */
+    function flattenChangedMasterDataRecords(data) {
+        if (!data) return [];
+        const tag = (list, category) =>
+            Array.isArray(list) ? list.filter(r => r && r.isNew).map(record => ({ category, record })) : [];
+
+        return [
+            ...tag(data.accounts, "account"),
+            ...tag(data.classes, "class"),
+            ...tag(data.locations, "location"),
+            ...tag(data.customers, "customer"),
+            ...tag(data.vendors, "vendor")
+        ];
+    }
+
+    /**
+     * Flattens a Master Data Pull response into a single ordered queue of
+     * EVERY record (not just isNew ones) — company/org entries first (so
+     * an org with no other data yet still gets its name row seeded, same
+     * as ExcelService.writeMasterData already does), then accounts,
+     * classes, locations, customers, and vendors, matching the section
+     * order/precedence writeMasterData writes in. This is the source
+     * list the manual per-click Pull Master Data queue
+     * (MANUAL_REFRESH_BATCH_SIZE records at a time) is built from — see
+     * ExcelService.appendManualBatch's "company" case and
+     * batchDataLoader.js's manual batch queue helpers.
+     *
+     * @param {object} data - Master Data Pull response
+     * @returns {{category: "company"|"account"|"class"|"location"|"customer"|"vendor", record: object}[]}
+     */
+    function flattenAllMasterDataRecords(data) {
+        if (!data) return [];
+        const tag = (list, category) =>
+            Array.isArray(list) ? list.filter(Boolean).map(record => ({ category, record })) : [];
+        const rawCompanies = Array.isArray(data.company) ? data.company : (data.company ? [data.company] : []);
+
+        return [
+            ...tag(rawCompanies, "company"),
+            ...tag(data.accounts, "account"),
+            ...tag(data.classes, "class"),
+            ...tag(data.locations, "location"),
+            ...tag(data.customers, "customer"),
+            ...tag(data.vendors, "vendor")
+        ];
+    }
+
     const ExcelService = {
         /**
          * Populates Excel workbook sheet "1.Master_Data" with ERP payload.
@@ -1025,11 +1202,16 @@ Office.onReady(() => {
 
         /**
          * Appends only brand-new records from a Master Data Pull to the
-         * "1.Master_Data" sheet. This is what powers the Refresh Schedule
-         * button — unlike writeMasterData (used by the initial "Pull
-         * Data" step), it NEVER clears or reorders existing rows; it only
-         * ever adds rows below whatever is already there.
+         * "1.Master_Data" sheet — an incremental, append-only ledger
+         * writer. NOT currently called by the UI: the Refresh Schedule
+         * button now pulls and (re)writes the full master data set in
+         * batches, the same as Pull Master Data (see handleRefreshClick /
+         * handlePullClick, both driven by flattenAllMasterDataRecords +
+         * ExcelService.appendManualBatch). Kept as a self-contained
+         * utility in case an isNew-only incremental refresh mode is
+         * wanted again later.
          *
+
          * - First sync for this connection (data.isFirstSync === true,
          *   set by the backend from the connection's last_synced_at):
          *   the sheet has nothing to preserve yet, so this just delegates
@@ -1058,15 +1240,33 @@ Office.onReady(() => {
                 return countAllMasterDataRecords(data);
             }
 
-            const newCustomers = Array.isArray(data.customers) ? data.customers.filter(c => c.isNew) : [];
-            const newVendors = Array.isArray(data.vendors) ? data.vendors.filter(v => v.isNew) : [];
-            const newAccounts = Array.isArray(data.accounts) ? data.accounts.filter(a => a.isNew) : [];
-            const newClasses = Array.isArray(data.classes) ? data.classes.filter(c => c.isNew) : [];
-            const newLocations = Array.isArray(data.locations) ? data.locations.filter(l => l.isNew) : [];
+            const flatQueue = flattenChangedMasterDataRecords(data);
+            if (flatQueue.length === 0) return 0;
 
-            const totalNew = newCustomers.length + newVendors.length + newAccounts.length
-                + newClasses.length + newLocations.length;
-            if (totalNew === 0) return 0;
+            await ExcelService.appendManualBatch(provider, flatQueue);
+            return flatQueue.length;
+        },
+
+        /**
+         * Appends one already-sliced batch of tagged records (see
+         * flattenChangedMasterDataRecords / batchDataLoader.js's manual
+         * batch queue) below whatever is already on the "1.Master_Data"
+         * sheet — never clearing or reordering existing rows, exactly
+         * like appendNewMasterData's writer, just parametrized on a
+         * pre-sliced list instead of a raw Master Data Pull response.
+         *
+         * This is what the manual, click-driven "MANUAL_REFRESH_BATCH_SIZE
+         * records per click" workflow calls directly with a single
+         * batch slice; appendNewMasterData (the un-batched "write everything
+         * new" path) now delegates here too, passing its whole flattened
+         * list in one call, so both paths share one writer.
+         *
+         * @param {string} provider - Active ERP provider ("quickbooks" | "xero")
+         * @param {{category: string, record: object}[]} batch
+         * @returns {Promise<number>} number of records written
+         */
+        async appendManualBatch(provider, batch) {
+            if (!batch || batch.length === 0) return 0;
 
             const fallbackOrgName = provider === "quickbooks" ? "QuickBooks Company" : "Xero Organisation";
             const orgGroupsMap = new Map();
@@ -1079,32 +1279,44 @@ Office.onReady(() => {
                 return orgGroupsMap.get(key);
             };
 
-            for (const a of newAccounts) {
-                getOrCreateGroup(a.clientName || a.clientId || fallbackOrgName).accounts.push(a);
-            }
-            for (const c of newClasses) {
-                getOrCreateGroup(c.clientName || c.clientId || fallbackOrgName).classes.push(c);
-            }
-            for (const l of newLocations) {
-                getOrCreateGroup(l.clientName || l.clientId || fallbackOrgName).locations.push(l);
-            }
-            for (const cust of newCustomers) {
-                const group = getOrCreateGroup(cust.clientName || cust.clientId || fallbackOrgName);
-                group.entities.push({
-                    name: cust.name || cust.DisplayName || cust.Name || "",
-                    type: "Customer",
-                    id: cust.id || cust.Id || cust.ContactID || "",
-                    status: cust.active !== undefined ? (cust.active ? "Active" : "Inactive") : "Active"
-                });
-            }
-            for (const vend of newVendors) {
-                const group = getOrCreateGroup(vend.clientName || vend.clientId || fallbackOrgName);
-                group.entities.push({
-                    name: vend.name || vend.DisplayName || vend.Name || "",
-                    type: "Vendor",
-                    id: vend.id || vend.Id || vend.ContactID || "",
-                    status: vend.active !== undefined ? (vend.active ? "Active" : "Inactive") : "Active"
-                });
+            for (const { category, record } of batch) {
+                if (!record) continue;
+
+                if (category === "company") {
+                    // Seeds an org group from the ERP's company/organization
+                    // list even when it has no accounts/classes/locations/
+                    // customers/vendors of its own yet, so the org's name
+                    // row still appears — mirrors writeMasterData's original
+                    // "Group Companies" step. Only flattenAllMasterDataRecords
+                    // (the Pull Master Data queue) ever produces this
+                    // category; the Refresh Schedule queue never does.
+                    getOrCreateGroup(record.name || fallbackOrgName);
+                    continue;
+                }
+
+                const orgKey = record.clientName || record.clientId || fallbackOrgName;
+
+                if (category === "account") {
+                    getOrCreateGroup(orgKey).accounts.push(record);
+                } else if (category === "class") {
+                    getOrCreateGroup(orgKey).classes.push(record);
+                } else if (category === "location") {
+                    getOrCreateGroup(orgKey).locations.push(record);
+                } else if (category === "customer") {
+                    getOrCreateGroup(orgKey).entities.push({
+                        name: record.name || record.DisplayName || record.Name || "",
+                        type: "Customer",
+                        id: record.id || record.Id || record.ContactID || "",
+                        status: record.active !== undefined ? (record.active ? "Active" : "Inactive") : "Active"
+                    });
+                } else if (category === "vendor") {
+                    getOrCreateGroup(orgKey).entities.push({
+                        name: record.name || record.DisplayName || record.Name || "",
+                        type: "Vendor",
+                        id: record.id || record.Id || record.ContactID || "",
+                        status: record.active !== undefined ? (record.active ? "Active" : "Inactive") : "Active"
+                    });
+                }
             }
 
             await Excel.run(async (context) => {
@@ -1190,7 +1402,25 @@ Office.onReady(() => {
                 await context.sync();
             });
 
-            return totalNew;
+            return batch.length;
+        },
+
+        /**
+         * Clears only the "1.Master_Data" sheet's data range (A2:AB10000)
+         * in place — the same clear writeMasterData does at the start of
+         * a full rewrite, pulled out on its own so the manual, batched
+         * Pull Master Data flow can clear exactly once at the start of a
+         * pull cycle and then append each batch afterward via
+         * appendManualBatch, instead of clearing (and losing prior
+         * batches) on every click.
+         */
+        async clearMasterDataRange() {
+            await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getItem("1.Master_Data");
+                const clearRange = sheet.getRange("A2:AB10000");
+                clearRange.clear("All");
+                await context.sync();
+            });
         },
 
         async clearMasterData() {
@@ -1359,6 +1589,15 @@ Office.onReady(() => {
         },
 
         handleNewUserAuthed(email, name, provider, subscriptionId, plan, token) {
+            // Drop any notification history cached in memory for whoever
+            // was previously signed in on this taskpane session (e.g. an
+            // account switch without a full logout) — otherwise the badge
+            // could flash the previous user's unread count for the instant
+            // before NotificationService.init()'s backend refetch (below,
+            // via DashboardService.render()) lands.
+            NotificationService._cache = [];
+            NotificationService._lastNotif = null;
+
             AppState.userEmail = email;
             AppState.userName = name;
             AppState.userProvider = provider;
@@ -1401,6 +1640,12 @@ Office.onReady(() => {
          * @param {string} provider
          */
         async handleReturningUser(email, name, provider, token) {
+            // Same reasoning as handleNewUserAuthed above — clear the
+            // previous account's cached notifications before this account's
+            // data replaces it.
+            NotificationService._cache = [];
+            NotificationService._lastNotif = null;
+
             AppState.userEmail = email;
             AppState.userName = name;
             AppState.userProvider = provider;
@@ -1610,6 +1855,17 @@ Office.onReady(() => {
             AppState.erpConnectedDate = null;
             AppState.jwtToken = null;  // Clear the JWT token on logout
             AppState.refreshToken = null; // Clear the refresh token on logout
+
+            // Notification history is per-user server-side data — drop the
+            // in-memory cache and badge/drawer on logout so nothing from
+            // this account is still visible (even for an instant) if a
+            // different account signs in next in this same taskpane session.
+            NotificationService._cache = [];
+            NotificationService._lastNotif = null;
+            NotificationService.renderBadge();
+            const notifDrawerEl = document.getElementById("notifDrawer");
+            if (notifDrawerEl) notifDrawerEl.style.display = "none";
+
             // Note: AppState.sessionExpired is deliberately NOT reset here —
             // it's only cleared once a fresh token is obtained via a
             // successful login (see checkSubscription / handleGoogleAuth /
@@ -3659,21 +3915,87 @@ Office.onReady(() => {
             });
 
             // Pull Data button in provider-selected state
-            document.getElementById("pullBtnProv")?.addEventListener("click", async () => {
+            // Pull Master Data buttons (provider-selected + default state
+            // share this one handler, same as Refresh Schedule further
+            // below). Pull Master Data and Refresh Schedule are two
+            // triggers for the SAME sequential batch loader: they share
+            // one FA_NextRowIndex-style position per provider/company
+            // (see getManualBatchQueue/setManualBatchQueue in
+            // batchDataLoader.js), so whichever button is clicked, it
+            // fetches (or resumes) the current master data set and writes
+            // just the next MANUAL_REFRESH_BATCH_SIZE records to the
+            // sheet: the first click of a cycle fetches from the ERP,
+            // clears the sheet once, and writes only the first batch;
+            // every following click — Pull or Refresh, either one — writes
+            // the next batch straight from the already-fetched data (no
+            // re-pull) until everything has been written, at which point
+            // the "Pull" step is marked complete. Clicking Pull Master
+            // Data must never rewind or reset this shared position.
+            const handlePullClick = async (event) => {
+                const button = event.currentTarget;
+                const isProv = button.id === "pullBtnProv";
+                const provider = AppState.currentProvider;
+                const companyId = AppState.currentCompanyId;
+                const providerLabel = provider === "quickbooks" ? "QuickBooks" : "Xero";
+                const stepId = isProv
+                    ? "provStepPull"
+                    : (provider === "quickbooks" ? "stepPull" : "xeroStepPull");
+
                 try {
-                    document.getElementById("provStepPull")?.classList.add("active");
-                    DashboardService.addLog(`Pulling master data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Pulling data...", "success", null, AppState.currentProvider);
-                    const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
-                    await ExcelService.writeMasterData(AppState.currentProvider, data);
-                    DashboardService.markStepComplete("pull");
-                    const changedCount = countChangedMasterDataRecords(data);
-                    const pullTitle = "Data pull completed successfully.";
-                    const pullDetail = changedCount > 0
-                        ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
-                        : "Data synchronized successfully.";
+                    document.getElementById(stepId)?.classList.add("active");
+
+                    // Shared resume-instead-of-repull pattern with Refresh
+                    // Schedule (see handleRefreshClick below) — a batch
+                    // cycle in progress is served its next batch of
+                    // records from the same already-fetched shared queue,
+                    // regardless of which button reads it; the ERP is only
+                    // called again once that shared queue is fully drained.
+                    let queue = getManualBatchQueue(provider, companyId);
+                    const queueExhausted = !queue || queue.nextIndex >= queue.records.length;
+
+                    if (queueExhausted) {
+                        DashboardService.addLog(`Pulling master data from ${providerLabel}...`);
+                        DashboardService.showStatus("Pulling data...", "success", null, provider);
+
+                        const data = await ApiService.fetchMasterData(provider, companyId);
+
+                        // Start of a fresh pull cycle (the shared queue was
+                        // empty/fully drained): clear the sheet's data
+                        // range exactly once and begin a new shared batch
+                        // sequence from record 1.
+                        await ExcelService.clearMasterDataRange();
+
+                        const flatQueue = flattenAllMasterDataRecords(data);
+
+                        if (flatQueue.length === 0) {
+                            clearManualBatchQueue(provider, companyId);
+                            DashboardService.markStepComplete("pull");
+                            DashboardService.addLog("Pull: no more data available.");
+                            DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
+                            DashboardService.renderERPSection();
+                            return;
+                        }
+
+                        queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
+                    }
+
+                    const { batch, nextIndex, isDone, total, batchStart, batchEnd } =
+                        takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
+
+                    await ExcelService.appendManualBatch(provider, batch);
+
+                    if (isDone) {
+                        clearManualBatchQueue(provider, companyId);
+                        DashboardService.markStepComplete("pull");
+                    } else {
+                        setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
+                    }
+
+                    const pullTitle = isDone ? "Data pull completed successfully." : "Batch written.";
+                    const pullDetail = `Rows ${batchStart}-${batchEnd} of ${total} written.`
+                        + (isDone ? " All master data imported." : " Click Pull Master Data again for the next batch.");
                     DashboardService.addLog(`${pullTitle} ${pullDetail}`);
-                    DashboardService.showStatus(pullTitle, "success", pullDetail, AppState.currentProvider);
+                    DashboardService.showStatus(pullTitle, "success", pullDetail, provider);
                     DashboardService.renderERPSection();
                 } catch (error) {
                     console.error(error);
@@ -3687,10 +4009,10 @@ Office.onReady(() => {
                         : "Error pulling data: " + error.message;
                     DashboardService.addLog(msg);
                     DashboardService.showStatus(
-                        isExpired ? error.message : "Data pull failed.",
+                        isExpired ? error.message : (isProv ? "Data pull failed." : "Please set up the master sheet before pulling the master data"),
                         "error",
-                        isExpired ? "" : "Please try again.",
-                        AppState.currentProvider
+                        isExpired ? "" : (isProv ? "Please try again." : ""),
+                        provider
                     );
                     if (isExpired) {
                         // renderERPConsole() only toggles a progress-step
@@ -3707,7 +4029,9 @@ Office.onReady(() => {
                         }
                     }
                 }
-            });
+            };
+
+            document.getElementById("pullBtnProv")?.addEventListener("click", handlePullClick);
 
             // Journal type buttons in provider-selected state
             document.querySelectorAll("#dashProviderSelected .conn-journal-btn").forEach(btn => {
@@ -3737,57 +4061,7 @@ Office.onReady(() => {
             });
 
             // Pull Data button
-            document.getElementById("pullBtn")?.addEventListener("click", async () => {
-                try {
-                    const stepPullId = AppState.currentProvider === "quickbooks" ? "stepPull" : "xeroStepPull";
-                    document.getElementById(stepPullId)?.classList.add("active");
-
-                    DashboardService.addLog(`Pulling master data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Pulling data...", "success", null, AppState.currentProvider);
-                    const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
-                    await ExcelService.writeMasterData(AppState.currentProvider, data);
-                    DashboardService.completeStep("stepPull");
-                    const changedCount = countChangedMasterDataRecords(data);
-                    const pullTitle = "Data pull completed successfully.";
-                    const pullDetail = changedCount > 0
-                        ? `${changedCount} new/updated record${changedCount === 1 ? "" : "s"} found.`
-                        : "Data synchronized successfully.";
-                    DashboardService.addLog(`${pullTitle} ${pullDetail}`);
-                    DashboardService.showStatus(pullTitle, "success", pullDetail, AppState.currentProvider);
-                    DashboardService.renderERPSection();
-                } catch (error) {
-                    console.error(error);
-                    // ApiService already showed the orange "reconnect" banner
-                    // (or the offline banner) as a global side effect when
-                    // this came from apiFetch — branch on the standardized
-                    // `.code` here too, never on message text.
-                    const isExpired = error.code === ERROR_CODES.ERP_SESSION_EXPIRED;
-                    const msg = isExpired
-                        ? error.message
-                        : "Error pulling data: " + error.message;
-                    DashboardService.addLog(msg);
-                    DashboardService.showStatus(
-                        isExpired ? error.message : "Please set up the master sheet before pulling the master data",
-                        "error",
-                        isExpired ? "" : "",
-                        AppState.currentProvider
-                    );
-                    if (isExpired) {
-                        // renderERPConsole() only toggles a progress-step
-                        // marker — it doesn't touch the company badge. To
-                        // actually flip ACTIVE -> Reconnect in the UI, we
-                        // need to re-fetch connections and re-render the
-                        // company list, which is what renderERPSection()
-                        // does. Guarded in case of an unexpected error, so
-                        // it can't surface as an uncaught runtime popup.
-                        try {
-                            DashboardService.renderERPSection();
-                        } catch (renderErr) {
-                            console.error("Failed to refresh ERP section after session expiry:", renderErr);
-                        }
-                    }
-                }
-            });
+            document.getElementById("pullBtn")?.addEventListener("click", handlePullClick);
 
             // Journal type buttons
             document.querySelectorAll(".conn-journal-btn").forEach(btn => {
@@ -3851,62 +4125,92 @@ Office.onReady(() => {
             // Refresh Schedule buttons
             const handleRefreshClick = async (event) => {
                 const button = event.currentTarget;
-                const isProv = button.id === "btnRefreshScheduleProv";
 
-                // Verify that both setup and pull steps are complete first
-                let isSetupComplete = false;
-                let isPullComplete = false;
-
-                if (isProv) {
-                    isSetupComplete = document.getElementById("provStepSetup")?.classList.contains("complete");
-                    isPullComplete = document.getElementById("provStepPull")?.classList.contains("complete");
-                } else {
-                    const stepSetupId = AppState.currentProvider === "quickbooks" ? "stepSetup" : "xeroStepSetup";
-                    const stepPullId = AppState.currentProvider === "quickbooks" ? "stepPull" : "xeroStepPull";
-                    isSetupComplete = document.getElementById(stepSetupId)?.classList.contains("complete");
-                    isPullComplete = document.getElementById(stepPullId)?.classList.contains("complete");
-                }
-
-                if (!isSetupComplete || !isPullComplete) {
-                    DashboardService.addLog("Cannot refresh: Setup and initial Pull must be completed first.");
-                    DashboardService.showStatus("Please pull the master data before refreshing the schedule.", "error", null, AppState.currentProvider);
-                    return;
-                }
+                // Refresh Schedule no longer requires Setup/Pull to already
+                // be marked "complete" before it can run — Pull Master Data
+                // and Refresh are two triggers for the same shared batch
+                // loader (see handlePullClick above and
+                // batchDataLoader.js#getManualBatchQueue), so Refresh must
+                // be usable right after the very first Pull click, not just
+                // once an entire multi-batch pull cycle has fully drained.
 
                 const icon = button.querySelector(".refresh-icon");
                 if (icon) icon.classList.add("spin");
 
-                try {
-                    DashboardService.addLog(`Refreshing live data from ${AppState.currentProvider === "quickbooks" ? "QuickBooks" : "Xero"}...`);
-                    DashboardService.showStatus("Refreshing...", "success", null, AppState.currentProvider);
+                const provider = AppState.currentProvider;
+                const companyId = AppState.currentCompanyId;
+                const providerLabel = provider === "quickbooks" ? "QuickBooks" : "Xero";
 
-                    const data = await ApiService.fetchMasterData(AppState.currentProvider, AppState.currentCompanyId);
-                    // Refresh Schedule never re-pulls/re-writes the whole
-                    // sheet — it appends only records the backend flagged
-                    // isNew since the last successful sync (or, on a true
-                    // first sync, writes everything once). See
-                    // ExcelService.appendNewMasterData.
-                    const newCount = await ExcelService.appendNewMasterData(AppState.currentProvider, data);
+                try {
+                    // Refresh Schedule is the other trigger for the SAME
+                    // sequential batch loader as Pull Master Data (see
+                    // handlePullClick above) — they share one
+                    // FA_NextRowIndex-style position per provider/company,
+                    // not separate counters. Each click, from either
+                    // button, writes at most MANUAL_REFRESH_BATCH_SIZE
+                    // records to the sheet, resuming from wherever the
+                    // previous click (Pull OR Refresh) left off.
+                    //
+                    // If a previous click already fetched a full set of
+                    // master data and hasn't finished writing all of it
+                    // yet, this click serves the next batch straight from
+                    // that shared cached queue and does NOT call the ERP
+                    // again — only once the shared queue is fully drained
+                    // does the next click go back to the ERP for a fresh
+                    // pull.
+                    let queue = getManualBatchQueue(provider, companyId);
+                    const queueExhausted = !queue || queue.nextIndex >= queue.records.length;
+
+                    if (queueExhausted) {
+                        DashboardService.addLog(`Refreshing live data from ${providerLabel}...`);
+                        DashboardService.showStatus("Refreshing...", "success", null, provider);
+
+                        const data = await ApiService.fetchMasterData(provider, companyId);
+
+                        // Start of a fresh cycle (the shared queue was
+                        // empty/fully drained): clear the sheet's data
+                        // range exactly once and begin a new shared batch
+                        // sequence from record 1, same as Pull Master Data.
+                        await ExcelService.clearMasterDataRange();
+
+                        const flatQueue = flattenAllMasterDataRecords(data);
+
+                        if (flatQueue.length === 0) {
+                            clearManualBatchQueue(provider, companyId);
+                            const timestamp = new Date().toLocaleTimeString();
+                            await ExcelService.stampLastRefreshed(timestamp);
+                            DashboardService.addLog("Refresh: no more data available.");
+                            DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
+                            return;
+                        }
+
+                        queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
+                    }
+
+                    const { batch, nextIndex, isDone, total, batchStart, batchEnd } =
+                        takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
+
+                    await ExcelService.appendManualBatch(provider, batch);
 
                     const timestamp = new Date().toLocaleTimeString();
                     await ExcelService.stampLastRefreshed(timestamp);
 
-                    const refreshTitle = "Data refresh completed successfully.";
-                    const refreshDetail = data && data.isFirstSync
-                        ? `${newCount} record${newCount === 1 ? "" : "s"} imported.`
-                        : (newCount > 0
-                            ? `${newCount} new record${newCount === 1 ? "" : "s"} appended.`
-                            : "No new data since the last refresh.");
-                    DashboardService.addLog(
-                        newCount > 0
-                            ? `Live data refreshed — ${refreshDetail}`
-                            : "Live data refreshed — no new records since the last refresh."
-                    );
-                    DashboardService.showStatus(refreshTitle, "success", refreshDetail, AppState.currentProvider);
+                    if (isDone) {
+                        clearManualBatchQueue(provider, companyId);
+                        DashboardService.markStepComplete("pull");
+                    } else {
+                        setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
+                    }
+
+                    const refreshTitle = isDone ? "Data refresh completed successfully." : "Batch written.";
+                    const refreshDetail = `Rows ${batchStart}-${batchEnd} of ${total} written.`
+                        + (isDone ? " All caught up." : " Click Refresh again for the next batch.");
+                    DashboardService.addLog(`${refreshTitle} ${refreshDetail}`);
+                    DashboardService.showStatus(refreshTitle, "success", refreshDetail, provider);
                 } catch (err) {
                     console.error("Refresh error:", err);
                     DashboardService.addLog("Error refreshing: " + err.message);
-                    DashboardService.showStatus("Data refresh failed.", "error", "Please try again.", AppState.currentProvider);
+                    DashboardService.showStatus("Data refresh failed.", "error", "Please try again.", provider);
                 } finally {
                     setTimeout(() => {
                         if (icon) icon.classList.remove("spin");

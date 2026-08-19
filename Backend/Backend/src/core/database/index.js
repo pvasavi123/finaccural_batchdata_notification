@@ -21,10 +21,15 @@ const User = require('../../modules/auth/user.model')(sequelize);
 // can be deleted.
 const Admin = require('../../modules/admin/model')(sequelize);
 
+// Per-user notification history (see modules/notifications) — replaces
+// the old client-only localStorage `fa_notifications` store.
+const Notification = require('../../modules/notifications/notification.model')(sequelize);
+
 module.exports = {
     sequelize,
     QuickBooksToken,
     XeroToken,
     User,
-    Admin   // legacy alias — will be removed after admin module is retired
+    Admin,  // legacy alias — will be removed after admin module is retired
+    Notification
 };

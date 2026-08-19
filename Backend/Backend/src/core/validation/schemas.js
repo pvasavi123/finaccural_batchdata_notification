@@ -137,6 +137,18 @@ const excelVsDatabase = Joi.object({
     fileBase64
 });
 
+// POST /api/notifications — { type, message, detail?, provider? }
+// userId is NEVER part of this schema — it always comes from the
+// verified req.user.userId (see modules/notifications/controller.js),
+// never a client-suppliable field, so one user can't create a
+// notification under another user's id.
+const createNotification = Joi.object({
+    type:     Joi.string().trim().lowercase().valid('success', 'error').required(),
+    message:  Joi.string().trim().min(1).max(500).required(),
+    detail:   Joi.string().trim().max(1000).allow('', null),
+    provider: Joi.string().trim().lowercase().valid('quickbooks', 'xero').allow(null)
+});
+
 module.exports = {
     signup,
     login,
@@ -153,5 +165,6 @@ module.exports = {
     selectXeroCompanies,
     excelSchemaCheck,
     excelVsApi,
-    excelVsDatabase
+    excelVsDatabase,
+    createNotification
 };
