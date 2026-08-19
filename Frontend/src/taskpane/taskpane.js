@@ -268,7 +268,7 @@ Office.onReady(() => {
          * later, but it's fully invisible in the meantime. Untagged (global)
          * notifications — login, payment, logout, etc. — aren't tied to
          * either ERP and always show.
-         * @param {string} message - short outcome, e.g. "Data pull completed successfully"
+         * @param {string} message - short outcome, e.g. "Data completed."
          * @param {"success"|"error"} type
          * @param {string} [detail] - optional second line, e.g. "Data synchronized successfully."
          * @param {"quickbooks"|"xero"} [provider] - which ERP this belongs to, if any
@@ -3979,7 +3979,7 @@ Office.onReady(() => {
                         queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
                     }
 
-                    const { batch, nextIndex, isDone, total, batchStart, batchEnd } =
+                    const { batch, nextIndex, isDone, total } =
                         takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
 
                     await ExcelService.appendManualBatch(provider, batch);
@@ -3991,11 +3991,14 @@ Office.onReady(() => {
                         setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
                     }
 
-                    const pullTitle = isDone ? "Data pull completed successfully." : "Batch written.";
-                    const pullDetail = `Rows ${batchStart}-${batchEnd} of ${total} written.`
-                        + (isDone ? " All master data imported." : " Click Pull Master Data again for the next batch.");
-                    DashboardService.addLog(`${pullTitle} ${pullDetail}`);
-                    DashboardService.showStatus(pullTitle, "success", pullDetail, provider);
+                    const pullTitle = isDone ? "Data completed." : "Batch written.";
+                    // No row-range numbers (e.g. "Rows 71-80 of 150") in the
+                    // user-facing detail — just the plain outcome/next step.
+                    // Finished state is just "Data completed." on its own,
+                    // no extra detail line.
+                    const pullDetail = isDone ? "" : "Click Pull Master Data again for the next batch.";
+                    DashboardService.addLog(pullDetail ? `${pullTitle} ${pullDetail}` : pullTitle);
+                    DashboardService.showStatus(pullTitle, "success", pullDetail || null, provider);
                     DashboardService.renderERPSection();
                 } catch (error) {
                     console.error(error);
@@ -4187,7 +4190,7 @@ Office.onReady(() => {
                         queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
                     }
 
-                    const { batch, nextIndex, isDone, total, batchStart, batchEnd } =
+                    const { batch, nextIndex, isDone, total } =
                         takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
 
                     await ExcelService.appendManualBatch(provider, batch);
@@ -4202,11 +4205,14 @@ Office.onReady(() => {
                         setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
                     }
 
-                    const refreshTitle = isDone ? "Data refresh completed successfully." : "Batch written.";
-                    const refreshDetail = `Rows ${batchStart}-${batchEnd} of ${total} written.`
-                        + (isDone ? " All caught up." : " Click Refresh again for the next batch.");
-                    DashboardService.addLog(`${refreshTitle} ${refreshDetail}`);
-                    DashboardService.showStatus(refreshTitle, "success", refreshDetail, provider);
+                    const refreshTitle = isDone ? "Data completed." : "Batch written.";
+                    // No row-range numbers (e.g. "Rows 71-80 of 150") in the
+                    // user-facing detail — just the plain outcome/next step.
+                    // Finished state is just "Data completed." on its own,
+                    // no extra detail line.
+                    const refreshDetail = isDone ? "" : "Click Refresh again for the next batch.";
+                    DashboardService.addLog(refreshDetail ? `${refreshTitle} ${refreshDetail}` : refreshTitle);
+                    DashboardService.showStatus(refreshTitle, "success", refreshDetail || null, provider);
                 } catch (err) {
                     console.error("Refresh error:", err);
                     DashboardService.addLog("Error refreshing: " + err.message);
