@@ -2649,40 +2649,30 @@ Office.onReady(() => {
             if (stepEl) stepEl.classList.add("complete");
         },
 
-        // Console log history persists across taskpane refreshes (the
-        // add-in's DOM/JS state is rebuilt from scratch on every reload, so
-        // without this the QuickBooks/Xero log consoles would always come
-        // back empty). Capped so localStorage can't grow unbounded.
+        // Console log history is in-memory ONLY for the current taskpane
+        // session — it is never written to or restored from localStorage.
+        // A fresh taskpane load (reopening Excel, reconnecting, switching
+        // back to a company) always starts with an empty console: an entry
+        // can only ever appear after the real action it describes has
+        // actually run in THIS session, never carried over from an earlier
+        // one. Capped so it can't grow unbounded during a long session.
         //
-        // Every entry is tagged with both the provider AND the company that
-        // was active when it was logged. The console only ever renders
-        // entries matching the CURRENT provider + active company — this is
-        // what stops a log line like "Pulling master data..." from another
-        // company (or an earlier, unrelated session) from ever appearing
-        // as if it just happened. Each entry only shows up once the real
-        // action it describes has actually run for the company you're
-        // currently looking at.
-        LOG_STORAGE_KEY: "fa_console_logs",
+        // Every entry is still tagged with both the provider AND the
+        // company that was active when it was logged, and the console only
+        // ever renders entries matching the CURRENT provider + active
+        // company — that's what stops a log line from a different company
+        // (logged earlier in this same session) from showing up as if it
+        // just happened here.
         MAX_LOG_ENTRIES: 300,
+        _sessionLogs: [],
 
         /** @returns {Array<{provider:('quickbooks'|'xero'), companyId:(string|null), message:string, timestamp:string}>} */
         _loadLogs() {
-            try {
-                const raw = localStorage.getItem(this.LOG_STORAGE_KEY);
-                const parsed = raw ? JSON.parse(raw) : [];
-                return Array.isArray(parsed) ? parsed : [];
-            } catch (_) {
-                return [];
-            }
+            return this._sessionLogs;
         },
 
         _saveLogs(list) {
-            try {
-                localStorage.setItem(this.LOG_STORAGE_KEY, JSON.stringify(list));
-            } catch (_) {
-                // Storage full/unavailable — logs just won't persist across
-                // a refresh, but the app keeps working.
-            }
+            this._sessionLogs = list;
         },
 
         /**
@@ -3118,8 +3108,9 @@ Office.onReady(() => {
             this.resetSteps();
             this._saveStepState({});
 
-            // Clear logs — same reasoning: a real disconnect wipes history
-            // for good, unlike a taskpane refresh which must preserve it.
+            // Clear logs — the console is in-memory/session-only already
+            // (see DashboardService._sessionLogs above), this just also
+            // wipes what accumulated earlier in this same session.
             const qbLog = document.getElementById("qbLog");
             const xeroLog = document.getElementById("xeroLog");
             if (qbLog) qbLog.innerHTML = "";
