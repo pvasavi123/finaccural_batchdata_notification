@@ -92,9 +92,31 @@ class GoogleAuthService {
             );
             return response.data;
         } catch (error) {
-            console.error("GOOGLE EXCHANGE ERROR:", error.response ? error.response.data : error.message);
-            logger.error('Failed to exchange Google code for token', error.response?.data || error.message);
-            throw error;
+            // Diagnostic detail: when Google responds with an error (4xx),
+            // error.response.data carries their { error, error_description }
+            // body (e.g. "invalid_grant", "redirect_uri_mismatch",
+            // "invalid_client") — that's the actionable reason. When the
+            // request never got a response at all (network/DNS/TLS/proxy
+            // failure reaching oauth2.googleapis.com), error.response is
+            // undefined and error.code (ECONNREFUSED, ENOTFOUND, ETIMEDOUT,
+            // "UNABLE_TO_VERIFY_LEAF_SIGNATURE" for TLS-inspecting
+            // antivirus/proxies, etc.) is the actionable reason instead.
+            // Logging both cases explicitly avoids ever landing on a bare,
+            // uninformative "Failed to exchange Google code for token".
+            const googleErrorBody = error.response?.data;
+            const diagnostic = googleErrorBody
+                ? { httpStatus: error.response.status, ...googleErrorBody }
+                : { networkErrorCode: error.code || 'UNKNOWN', message: error.message };
+
+            console.error("GOOGLE EXCHANGE ERROR:", JSON.stringify(diagnostic));
+            logger.error('Failed to exchange Google code for token', JSON.stringify(diagnostic));
+
+            const reason = googleErrorBody
+                ? `${googleErrorBody.error || 'unknown_error'}${googleErrorBody.error_description ? ': ' + googleErrorBody.error_description : ''}`
+                : `${error.code || 'network_error'}: ${error.message}`;
+            const wrapped = new Error(`Google token exchange failed (${reason})`);
+            wrapped.cause = error;
+            throw wrapped;
         }
     }
 
