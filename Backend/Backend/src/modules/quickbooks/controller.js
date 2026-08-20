@@ -190,18 +190,105 @@ class QuickbooksController {
      * GET /api/quickbooks/export
      * Exports company, customers, vendors, accounts, classes, and locations
      * as an Excel file, scoped to the authenticated user's companies.
+     *
+     * Fetches in 10-record batches per entity instead of one big
+     * unpaginated call per entity. Each batch still fires every entity's
+     * API concurrently via Promise.all — same shape as the original
+     * single-shot Promise.all below, just repeated batch-by-batch — so
+     * customers/vendors/accounts/classes/locations all pull records
+     * 1–10 together, then 11–20 together, and so on, until every one of
+     * them has exhausted every connected company's data. Company info
+     * isn't paginated (one record per company) and is fetched once,
+     * up front, alongside a token→orgName lookup so the per-batch entity
+     * fetches don't each need their own CompanyInfo round trip.
      */
     exportMasterData = async (req, res, next) => {
         try {
             const mail = req.user.email;
-            const [company, customers, vendors, accounts, classes, locations] = await Promise.all([
-                QuickBooksService.getCompanyInfo(undefined, mail).catch(() => null),
-                QuickBooksService.getCustomers(mail).catch(() => []),
-                QuickBooksService.getVendors(mail).catch(() => []),
-                QuickBooksService.getAccounts(mail).catch(() => []),
-                QuickBooksService.getClasses(mail).catch(() => []),
-                QuickBooksService.getLocations(mail).catch(() => [])
-            ]);
+            const BATCH_SIZE = 10;
+
+            const { tokens: allTokens, company, orgNameByTokenId } =
+                await QuickBooksService.getCompanyInfoAndOrgNames(mail)
+                    .catch(() => ({ tokens: [], company: null, orgNameByTokenId: new Map() }));
+
+            // Per-entity list of tokens still known to have more pages —
+            // shrinks independently as each token/company reports its
+            // last (short) page, so a company with fewer records simply
+            // stops being queried for that entity while others with more
+            // data keep going. No two entities share a list, since one
+            // entity finishing early for a company must not affect the
+            // others' pagination.
+            let customersTokens = allTokens.slice();
+            let vendorsTokens   = allTokens.slice();
+            let accountsTokens  = allTokens.slice();
+            let classesTokens   = allTokens.slice();
+            let locationsTokens = allTokens.slice();
+
+            const customers = [];
+            const vendors   = [];
+            const accounts  = [];
+            const classes   = [];
+            const locations = [];
+
+            const dropExhausted = (list, exhaustedIds) =>
+                list.filter(t => !exhaustedIds.has(t.companyId || t.realm_id));
+            const allTokenIds = (list) => new Set(list.map(t => t.companyId || t.realm_id));
+            const emptyPage = () => ({ records: [], exhaustedTokenIds: new Set() });
+
+            let startPosition = 1;
+            let batchCount = 0;
+            // Safety valve only — each entity's token list can only
+            // shrink every iteration, so the loop is guaranteed to end
+            // long before this; it just guards against an infinite loop
+            // if that invariant is ever broken by a future change.
+            const MAX_BATCHES = 100000;
+
+            while (
+                (customersTokens.length || vendorsTokens.length || accountsTokens.length ||
+                 classesTokens.length || locationsTokens.length) &&
+                batchCount < MAX_BATCHES
+            ) {
+                batchCount += 1;
+
+                // All 5 entity APIs for this batch run together — nothing
+                // here waits for another to finish first.
+                const [customersResult, vendorsResult, accountsResult, classesResult, locationsResult] = await Promise.all([
+                    customersTokens.length
+                        ? QuickBooksService.getCustomersPage(customersTokens, startPosition, BATCH_SIZE, orgNameByTokenId)
+                            .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(customersTokens) }))
+                        : Promise.resolve(emptyPage()),
+                    vendorsTokens.length
+                        ? QuickBooksService.getVendorsPage(vendorsTokens, startPosition, BATCH_SIZE, orgNameByTokenId)
+                            .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(vendorsTokens) }))
+                        : Promise.resolve(emptyPage()),
+                    accountsTokens.length
+                        ? QuickBooksService.getAccountsPage(accountsTokens, startPosition, BATCH_SIZE, orgNameByTokenId)
+                            .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(accountsTokens) }))
+                        : Promise.resolve(emptyPage()),
+                    classesTokens.length
+                        ? QuickBooksService.getClassesPage(classesTokens, startPosition, BATCH_SIZE, orgNameByTokenId)
+                            .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(classesTokens) }))
+                        : Promise.resolve(emptyPage()),
+                    locationsTokens.length
+                        ? QuickBooksService.getLocationsPage(locationsTokens, startPosition, BATCH_SIZE, orgNameByTokenId)
+                            .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(locationsTokens) }))
+                        : Promise.resolve(emptyPage())
+                ]);
+
+                customers.push(...customersResult.records);
+                vendors.push(...vendorsResult.records);
+                accounts.push(...accountsResult.records);
+                classes.push(...classesResult.records);
+                locations.push(...locationsResult.records);
+
+                customersTokens = dropExhausted(customersTokens, customersResult.exhaustedTokenIds);
+                vendorsTokens   = dropExhausted(vendorsTokens, vendorsResult.exhaustedTokenIds);
+                accountsTokens  = dropExhausted(accountsTokens, accountsResult.exhaustedTokenIds);
+                classesTokens   = dropExhausted(classesTokens, classesResult.exhaustedTokenIds);
+                locationsTokens = dropExhausted(locationsTokens, locationsResult.exhaustedTokenIds);
+
+                startPosition += BATCH_SIZE;
+            }
 
             const wb = new exceljs.Workbook();
 

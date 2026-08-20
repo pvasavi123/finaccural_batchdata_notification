@@ -168,6 +168,29 @@ class QuickBooksService {
     }
 
     /**
+     * Fetches exactly ONE page of `entityName` for a single token via
+     * STARTPOSITION/MAXRESULTS — the single-page counterpart to
+     * queryAll() above, which recurses through every page internally
+     * and returns everything at once. This is what lets a caller (see
+     * exportMasterData's batch loop) drive pagination one 10-record
+     * batch at a time instead of waiting for a full recursive fetch.
+     * @param {string} entityName - QBQL entity name, e.g. "Customer".
+     * @param {object} token
+     * @param {number} startPosition - 1-based, QuickBooks STARTPOSITION.
+     * @param {number} pageSize - QuickBooks MAXRESULTS for this page.
+     * @returns {Promise<{ raw: object, records: object[], hasMore: boolean }>}
+     */
+    static async queryPage(entityName, token, startPosition, pageSize) {
+        const query = `SELECT * FROM ${entityName} STARTPOSITION ${startPosition} MAXRESULTS ${pageSize}`;
+        const raw = await QuickBooksService.executeQuery(query, token);
+        const records = raw?.QueryResponse?.[entityName] || [];
+        // A page shorter than pageSize means this was the entity's last
+        // page for this token — same "fewer than batchSize" signal
+        // queryAll() uses internally to stop recursing.
+        return { raw, records, hasMore: records.length === pageSize };
+    }
+
+    /**
      * Fetch company info and return clean CompanyDTO for a specific token or
      * all of the calling user's tokens.
      * @param {object} [token]
@@ -214,6 +237,45 @@ class QuickBooksService {
         const orgId   = company ? (company.id || company.name || realmId) : realmId;
         const orgName = company ? (company.name || company.legalName || company.id || "QuickBooks Company") : "QuickBooks Company";
         return { orgId, orgName };
+    }
+
+    /**
+     * Fetches every active token's CompanyInfo ONCE and returns both the
+     * "Company" worksheet data and a token→orgName lookup in a single
+     * pass. Used by exportMasterData's batch loop so its per-batch,
+     * per-entity page fetches (getCustomersPage/getVendorsPage/etc.,
+     * below) can reuse an already-known org name instead of each one
+     * separately re-fetching CompanyInfo per token per batch — the way
+     * getCustomers()/getVendors()/etc. do today (once per entity type,
+     * via getCompanyMetadata) is fine for a single non-paginated call,
+     * but would mean 5x redundant CompanyInfo calls per token per batch
+     * if repeated on every page.
+     * @param {string} mail - Owning user's email; scopes which companies are queried.
+     * @returns {Promise<{ tokens: object[], company: CompanyDTO|CompanyDTO[]|null, orgNameByTokenId: Map<string, string> }>}
+     */
+    static async getCompanyInfoAndOrgNames(mail) {
+        const tokens = await QuickBooksTokenRepository.getActiveTokens(mail);
+        const orgNameByTokenId = new Map();
+
+        // Match getCompanyInfo(undefined, mail)'s own no-connections
+        // behavior exactly (returns null, not []) — exportMasterData's
+        // `if (company) {...}` check depends on that, and an empty
+        // array is truthy in JS.
+        if (!tokens || tokens.length === 0) {
+            return { tokens: [], company: null, orgNameByTokenId };
+        }
+
+        const companies = (await Promise.all(tokens.map(async (token) => {
+            const tokenId = token.companyId || token.realm_id;
+            const info = await QuickBooksService.getCompanyInfo(token).catch(() => null);
+            if (info) info.id = token.companyId;
+            const orgName = info ? (info.name || info.legalName || info.id || "QuickBooks Company") : "QuickBooks Company";
+            orgNameByTokenId.set(tokenId, orgName);
+            return info;
+        }))).filter(Boolean);
+
+        const company = companies.length === 1 ? companies[0] : companies;
+        return { tokens, company, orgNameByTokenId };
     }
 
     /**
@@ -349,6 +411,75 @@ class QuickBooksService {
             }
         }));
         return results.flat();
+    }
+
+    // ── Paginated (batch) entity fetchers ───────────────────────────────
+    //
+    // Counterparts to getCustomers/getVendors/getAccounts/getClasses/
+    // getLocations above, for callers that want to drive pagination one
+    // page at a time (see exportMasterData's batch loop) instead of
+    // getting every record back in a single call. Each one fetches at
+    // most `pageSize` records per still-active token, in parallel, and
+    // reports back which tokens have run out of pages so the caller can
+    // stop querying them on the next batch — no per-token pagination
+    // state is kept here between calls, that's the caller's job.
+
+    /**
+     * Shared implementation behind getCustomersPage/getVendorsPage/etc.
+     * @param {string} entityName - QBQL entity, e.g. "Customer".
+     * @param {Function} mapperFn - QuickBooksMapper.toXList, e.g. toCustomerList.
+     * @param {object[]} activeTokens - Tokens still known to have more pages for this entity.
+     * @param {number} startPosition - 1-based, QuickBooks STARTPOSITION.
+     * @param {number} pageSize - QuickBooks MAXRESULTS for this page.
+     * @param {Map<string,string>} orgNameByTokenId - From getCompanyInfoAndOrgNames(), so each
+     *   page doesn't need its own CompanyInfo round trip just to tag clientId/clientName.
+     * @returns {Promise<{ records: object[], exhaustedTokenIds: Set<string> }>}
+     */
+    static async _queryEntityPage(entityName, mapperFn, activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        const exhaustedTokenIds = new Set();
+        const perToken = await Promise.all(activeTokens.map(async (token) => {
+            const tokenId = token.companyId || token.realm_id;
+            try {
+                const { raw, records, hasMore } = await QuickBooksService.queryPage(entityName, token, startPosition, pageSize);
+                if (!hasMore) exhaustedTokenIds.add(tokenId);
+                const list = mapperFn(raw);
+                const orgName = (orgNameByTokenId && orgNameByTokenId.get(tokenId)) || "QuickBooks Company";
+                return list.map(item => ({ ...item, clientId: orgName, clientName: orgName }));
+            } catch (err) {
+                logger.error(`Error getting ${entityName} page (start ${startPosition}) for realm ${tokenId}:`, err.message);
+                // A token whose page request failed isn't retried on the
+                // next batch — same "log it, return empty, move on"
+                // contract as the non-paginated getters' per-token catch.
+                exhaustedTokenIds.add(tokenId);
+                return [];
+            }
+        }));
+        return { records: perToken.flat(), exhaustedTokenIds };
+    }
+
+    /** Paginated counterpart to getCustomers() — see _queryEntityPage. */
+    static async getCustomersPage(activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        return QuickBooksService._queryEntityPage('Customer', QuickBooksMapper.toCustomerList, activeTokens, startPosition, pageSize, orgNameByTokenId);
+    }
+
+    /** Paginated counterpart to getVendors() — see _queryEntityPage. */
+    static async getVendorsPage(activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        return QuickBooksService._queryEntityPage('Vendor', QuickBooksMapper.toVendorList, activeTokens, startPosition, pageSize, orgNameByTokenId);
+    }
+
+    /** Paginated counterpart to getAccounts() — see _queryEntityPage. */
+    static async getAccountsPage(activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        return QuickBooksService._queryEntityPage('Account', QuickBooksMapper.toAccountList, activeTokens, startPosition, pageSize, orgNameByTokenId);
+    }
+
+    /** Paginated counterpart to getClasses() — see _queryEntityPage. */
+    static async getClassesPage(activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        return QuickBooksService._queryEntityPage('Class', QuickBooksMapper.toClassList, activeTokens, startPosition, pageSize, orgNameByTokenId);
+    }
+
+    /** Paginated counterpart to getLocations() — see _queryEntityPage. */
+    static async getLocationsPage(activeTokens, startPosition, pageSize, orgNameByTokenId) {
+        return QuickBooksService._queryEntityPage('Department', QuickBooksMapper.toLocationList, activeTokens, startPosition, pageSize, orgNameByTokenId);
     }
 
     // ── Self-contained Connections Management & Pulling ────────────────
