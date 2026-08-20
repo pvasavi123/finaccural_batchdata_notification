@@ -97,6 +97,21 @@ class QuickBooksService {
         let realmId;
         let accessToken;
 
+        // ── TEMPORARY concurrency-verification instrumentation ──────────
+        // Logs the actual token-resolution + HTTP round trip timing for
+        // every QuickBooks query, tagged with entity/STARTPOSITION parsed
+        // straight out of the QBQL string, so REQUEST START timestamps
+        // from different calls (e.g. Customer @1, Vendor @1, Account @1
+        // fired from the same Promise.all) can be compared directly to
+        // prove — from real wall-clock timestamps, not code inspection —
+        // whether they were genuinely concurrent or serialized somewhere
+        // beneath the service layer (token lookup, DB pool, axios/agent,
+        // etc). Safe to delete once concurrency is confirmed.
+        const qbEntityMatch = /FROM\s+(\w+)/i.exec(query);
+        const qbPosMatch = /STARTPOSITION\s+(\d+)/i.exec(query);
+        const qbLabel = `${qbEntityMatch ? qbEntityMatch[1] : 'query'}${qbPosMatch ? ` @${qbPosMatch[1]}` : ''}`;
+        const qbCallStart = Date.now();
+
         if (token) {
             realmId = token.companyId || token.realm_id;
             // Always go through QuickBooksTokenManager rather than falling
@@ -116,7 +131,12 @@ class QuickBooksService {
             accessToken = await QuickBooksTokenManager.getValidToken(realmId);
         }
 
+        console.log(`[QB-HTTP] ${new Date().toISOString()} TOKEN READY     ${qbLabel} realm=${realmId} (+${Date.now() - qbCallStart}ms since executeQuery() was called)`);
+
         const url = `${CONSTANTS.QUICKBOOKS.BASE_URL}/v3/company/${realmId}/query`;
+
+        const qbHttpStart = Date.now();
+        console.log(`[QB-HTTP] ${new Date(qbHttpStart).toISOString()} REQUEST START   ${qbLabel} realm=${realmId}`);
 
         try {
             const response = await axios.get(url, {
@@ -127,8 +147,10 @@ class QuickBooksService {
                 },
                 params: { query }
             });
+            console.log(`[QB-HTTP] ${new Date().toISOString()} RESPONSE OK     ${qbLabel} realm=${realmId} (+${Date.now() - qbHttpStart}ms)`);
             return response.data;
         } catch (error) {
+            console.log(`[QB-HTTP] ${new Date().toISOString()} RESPONSE ERROR  ${qbLabel} realm=${realmId} (+${Date.now() - qbHttpStart}ms)`);
             logger.error(`Error executing QB query for realm ${realmId}:`, error.response?.data || error.message);
             throw error;
         }
@@ -482,6 +504,61 @@ class QuickBooksService {
         return QuickBooksService._queryEntityPage('Department', QuickBooksMapper.toLocationList, activeTokens, startPosition, pageSize, orgNameByTokenId);
     }
 
+    /**
+     * Fetches every page of the 5 paginated entities (Customer, Vendor,
+     * Account, Class, Department) for a SINGLE token, `pageSize` records
+     * at a time — the same concurrent-per-batch shape as exportMasterData's
+     * controller loop (all 5 requests for the current batch fire together
+     * via Promise.all, and the next batch only starts once that one
+     * resolves), just scoped to one token instead of driving multi-token
+     * exhaustion tracking across a whole connection list.
+     *
+     * This is what pullMasterData (the endpoint the Excel Add-in's Pull
+     * Master Data / Refresh Schedule buttons actually call) uses instead
+     * of firing one Promise.all of 5 full recursive queryAll() calls —
+     * queryAll's own internal paging (MAXRESULTS up to 1000) never
+     * produced the batch-by-batch, 10-records-at-a-time concurrency the
+     * QuickBooks batch spec calls for, even though the 5 entity types
+     * were already running concurrently relative to each other.
+     *
+     * Each entity independently drops out of later batches once it
+     * returns a short page — e.g. Vendor can stop after 15 records while
+     * Customer, with 47, keeps paging — without affecting the others.
+     * Returns QueryResponse-shaped objects so the existing
+     * QuickBooksMapper.toXList(raw, lastSyncedAt) calls in pullMasterData
+     * work completely unchanged (isNew/isUpdated flagging included).
+     *
+     * @param {object} token
+     * @param {number} [pageSize=10]
+     * @returns {Promise<{ Customer: object[], Vendor: object[], Account: object[], Class: object[], Department: object[] }>}
+     */
+    static async _fetchAllPaginatedEntitiesForToken(token, pageSize = 10) {
+        const entities = ['Customer', 'Vendor', 'Account', 'Class', 'Department'];
+        const recordsByEntity = { Customer: [], Vendor: [], Account: [], Class: [], Department: [] };
+        let active = entities.slice();
+        let startPosition = 1;
+
+        while (active.length > 0) {
+            // All still-active entities for this token start together —
+            // nothing here waits for another to finish first.
+            const pages = await Promise.all(active.map(entityName =>
+                QuickBooksService.queryPage(entityName, token, startPosition, pageSize)
+            ));
+
+            const stillActive = [];
+            active.forEach((entityName, i) => {
+                const { records, hasMore } = pages[i];
+                recordsByEntity[entityName].push(...records);
+                if (hasMore) stillActive.push(entityName);
+            });
+            active = stillActive;
+
+            startPosition += pageSize;
+        }
+
+        return recordsByEntity;
+    }
+
     // ── Self-contained Connections Management & Pulling ────────────────
 
     static PLAN_LIMITS = { trial: 1, basic: 1, standard: 3, pro: 10 };
@@ -623,13 +700,17 @@ class QuickBooksService {
                 const comp = QuickBooksMapper.toCompanyInfo(rawComp);
                 const companyList = comp ? [{ ...comp, id: token.companyId }] : [];
 
-                const [rawCust, rawVend, rawAcc, rawClass, rawLoc] = await Promise.all([
-                    QuickBooksService.queryAll('Customer', token),
-                    QuickBooksService.queryAll('Vendor', token),
-                    QuickBooksService.queryAll('Account', token),
-                    QuickBooksService.queryAll('Class', token),
-                    QuickBooksService.queryAll('Department', token)
-                ]);
+                // Concurrent, 10-records-per-batch fetch across all 5
+                // paginated entities for this token — see
+                // _fetchAllPaginatedEntitiesForToken. CompanyInfo above is
+                // deliberately outside this loop: it's a single record per
+                // company, not paginated.
+                const pagedEntities = await QuickBooksService._fetchAllPaginatedEntitiesForToken(token, 10);
+                const rawCust  = { QueryResponse: { Customer:   pagedEntities.Customer } };
+                const rawVend  = { QueryResponse: { Vendor:     pagedEntities.Vendor } };
+                const rawAcc   = { QueryResponse: { Account:    pagedEntities.Account } };
+                const rawClass = { QueryResponse: { Class:      pagedEntities.Class } };
+                const rawLoc   = { QueryResponse: { Department: pagedEntities.Department } };
 
                 const orgName = comp?.name || comp?.legalName || token.companyName;
                 const tag = (list) => list.map(i => ({ ...i, clientId: orgName, clientName: orgName }));

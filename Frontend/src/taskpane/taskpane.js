@@ -20,7 +20,9 @@ import {
     getManualBatchQueue,
     setManualBatchQueue,
     clearManualBatchQueue,
-    takeNextManualBatch
+    takeNextManualBatch,
+    hasManualCycleCompletedBefore,
+    markManualCycleCompleted
 } from "./batchDataLoader.js";
 import {
     ERROR_CODES,
@@ -3999,6 +4001,23 @@ Office.onReady(() => {
                             modalList.appendChild(row);
                         });
                         modal.style.display = "flex";
+                    })
+                    .catch((err) => {
+                        // This chain had no .catch() before — an offline
+                        // backend (or any other apiFetch failure) rejected
+                        // silently as an unhandled promise rejection instead
+                        // of being caught here, which is what crashed to the
+                        // "Uncaught runtime errors" dev overlay. The modal
+                        // just doesn't open now, same as every other
+                        // apiFetch caller in this file already does on
+                        // failure.
+                        console.error("Error loading companies for Change Company modal:", err);
+                        DashboardService.showStatus(
+                            "Couldn't load companies. Please check your connection and try again.",
+                            "error",
+                            null,
+                            AppState.currentProvider
+                        );
                     });
             };
 
@@ -4170,6 +4189,25 @@ Office.onReady(() => {
                             return;
                         }
 
+                        // A full cycle has already completed at least once for
+                        // this provider/company before, so this fresh cycle
+                        // must never leave the sheet sitting mostly empty
+                        // across several more clicks (that's the "data
+                        // disappears" bug) — write the entire freshly-fetched
+                        // set back right now, in this same click, instead of
+                        // pacing it out MANUAL_REFRESH_BATCH_SIZE records at a
+                        // time. Pacing only applies to the very first pull.
+                        if (hasManualCycleCompletedBefore(provider, companyId)) {
+                            await ExcelService.appendManualBatch(provider, flatQueue);
+                            clearManualBatchQueue(provider, companyId);
+                            markManualCycleCompleted(provider, companyId);
+                            DashboardService.markStepComplete("pull");
+                            DashboardService.addLog("Data completed.");
+                            DashboardService.showStatus("Data completed.", "success", null, provider);
+                            DashboardService.renderERPSection();
+                            return;
+                        }
+
                         queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
                     }
 
@@ -4180,6 +4218,7 @@ Office.onReady(() => {
 
                     if (isDone) {
                         clearManualBatchQueue(provider, companyId);
+                        markManualCycleCompleted(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
                         setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
@@ -4381,6 +4420,25 @@ Office.onReady(() => {
                             return;
                         }
 
+                        // Same fix as Pull Master Data above: once a cycle has
+                        // already completed before for this provider/company,
+                        // a fresh Refresh cycle writes the whole freshly-
+                        // fetched set back in this same click instead of
+                        // pacing it out over several more clicks, so
+                        // previously-completed data is never left visibly
+                        // diminished on the sheet.
+                        if (hasManualCycleCompletedBefore(provider, companyId)) {
+                            await ExcelService.appendManualBatch(provider, flatQueue);
+                            const doneTimestamp = new Date().toLocaleTimeString();
+                            await ExcelService.stampLastRefreshed(doneTimestamp);
+                            clearManualBatchQueue(provider, companyId);
+                            markManualCycleCompleted(provider, companyId);
+                            DashboardService.markStepComplete("pull");
+                            DashboardService.addLog("Data completed.");
+                            DashboardService.showStatus("Data completed.", "success", null, provider);
+                            return;
+                        }
+
                         queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
                     }
 
@@ -4394,6 +4452,7 @@ Office.onReady(() => {
 
                     if (isDone) {
                         clearManualBatchQueue(provider, companyId);
+                        markManualCycleCompleted(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
                         setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });

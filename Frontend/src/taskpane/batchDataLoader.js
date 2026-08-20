@@ -421,3 +421,83 @@ export function takeNextManualBatch(records, nextIndex, batchSize = MANUAL_REFRE
     batchEnd: start + batch.length
   };
 }
+
+// ============================================================
+// "Has a full cycle completed before?" marker
+// ============================================================
+//
+// Separate from the manual batch queue above (which is deleted the
+// moment a cycle finishes, so the *next* click starts a fresh cycle at
+// record 1). Without this marker, every cycle after the very first one
+// looks identical to the very first one: the sheet gets cleared via
+// ExcelService.clearMasterDataRange() and only the first
+// MANUAL_REFRESH_BATCH_SIZE records are written back, leaving the sheet
+// sitting mostly empty until several more Pull/Refresh clicks refill
+// it — i.e. previously-completed data "goes away" from the user's
+// point of view. This marker lets the caller tell those two situations
+// apart: the very first pull for a provider/company is still paced one
+// click at a time, but once a cycle has completed here before, a new
+// cycle is written back in full within the same click that fetched it,
+// so completed data is never left in a visibly-diminished state.
+//
+// Persisted the same way as the manual batch queue (localStorage, keyed
+// by provider/company) so it survives a taskpane reload.
+
+const MANUAL_QUEUE_COMPLETED_KEY = "fa_manual_batch_completed_once";
+
+function loadCompletedOnceMap() {
+  try {
+    const raw = localStorage.getItem(MANUAL_QUEUE_COMPLETED_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveCompletedOnceMap(all) {
+  try {
+    localStorage.setItem(MANUAL_QUEUE_COMPLETED_KEY, JSON.stringify(all));
+  } catch (_) {
+    // Storage full/unavailable — worst case this behaves like a
+    // first-ever pull again (paced), never a data-loss risk.
+  }
+}
+
+/**
+ * @param {string} provider
+ * @param {string} companyId
+ * @returns {boolean} whether a full Pull/Refresh cycle has already
+ *   completed at least once for this provider/company.
+ */
+export function hasManualCycleCompletedBefore(provider, companyId) {
+  const all = loadCompletedOnceMap();
+  return !!all[manualQueueKey(provider, companyId)];
+}
+
+/**
+ * Marks a full Pull/Refresh cycle as completed for this provider/company.
+ * Call this whenever `clearManualBatchQueue` is called because the queue
+ * finished naturally (isDone), never on disconnect/invalidation.
+ * @param {string} provider
+ * @param {string} companyId
+ */
+export function markManualCycleCompleted(provider, companyId) {
+  const all = loadCompletedOnceMap();
+  all[manualQueueKey(provider, companyId)] = true;
+  saveCompletedOnceMap(all);
+}
+
+/**
+ * Clears the "completed before" marker — call this alongside
+ * `clearManualBatchQueue` on disconnect/company-switch style
+ * invalidation (never on a normal cycle completion) so a genuinely new
+ * connection starts back at the paced, one-click-at-a-time first pull.
+ * @param {string} provider
+ * @param {string} companyId
+ */
+export function resetManualCycleCompleted(provider, companyId) {
+  const all = loadCompletedOnceMap();
+  delete all[manualQueueKey(provider, companyId)];
+  saveCompletedOnceMap(all);
+}
