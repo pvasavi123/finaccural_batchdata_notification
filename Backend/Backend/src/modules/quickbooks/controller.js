@@ -249,6 +249,19 @@ class QuickbooksController {
                 batchCount < MAX_BATCHES
             ) {
                 batchCount += 1;
+                const batchStartedAt = Date.now();
+
+                // ── TEMPORARY diagnostic logging ─────────────────────
+                // Logged synchronously for every still-active entity
+                // BEFORE the Promise.all below is even constructed, so
+                // all of a batch's START lines print together as one
+                // group regardless of how long each entity's HTTP
+                // response actually takes.
+                if (customersTokens.length) console.log(`[BATCH ${batchCount}][Customers] START position=${startPosition} limit=${BATCH_SIZE}`);
+                if (vendorsTokens.length) console.log(`[BATCH ${batchCount}][Vendors] START position=${startPosition} limit=${BATCH_SIZE}`);
+                if (accountsTokens.length) console.log(`[BATCH ${batchCount}][Accounts] START position=${startPosition} limit=${BATCH_SIZE}`);
+                if (classesTokens.length) console.log(`[BATCH ${batchCount}][Classes] START position=${startPosition} limit=${BATCH_SIZE}`);
+                if (locationsTokens.length) console.log(`[BATCH ${batchCount}][Locations] START position=${startPosition} limit=${BATCH_SIZE}`);
 
                 // All 5 entity APIs for this batch run together — nothing
                 // here waits for another to finish first.
@@ -274,6 +287,12 @@ class QuickbooksController {
                             .catch(() => ({ records: [], exhaustedTokenIds: allTokenIds(locationsTokens) }))
                         : Promise.resolve(emptyPage())
                 ]);
+
+                console.log(`[BATCH ${batchCount}][Customers] RESPONSE count=${customersResult.records.length} (+${Date.now() - batchStartedAt}ms since this batch's requests started)`);
+                console.log(`[BATCH ${batchCount}][Vendors] RESPONSE count=${vendorsResult.records.length} (+${Date.now() - batchStartedAt}ms since this batch's requests started)`);
+                console.log(`[BATCH ${batchCount}][Accounts] RESPONSE count=${accountsResult.records.length} (+${Date.now() - batchStartedAt}ms since this batch's requests started)`);
+                console.log(`[BATCH ${batchCount}][Classes] RESPONSE count=${classesResult.records.length} (+${Date.now() - batchStartedAt}ms since this batch's requests started)`);
+                console.log(`[BATCH ${batchCount}][Locations] RESPONSE count=${locationsResult.records.length} (+${Date.now() - batchStartedAt}ms since this batch's requests started)`);
 
                 customers.push(...customersResult.records);
                 vendors.push(...vendorsResult.records);

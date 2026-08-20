@@ -21,6 +21,8 @@ import {
     setManualBatchQueue,
     clearManualBatchQueue,
     takeNextManualBatch,
+    takeNextManualBatchByCategory,
+    isManualBatchByCategoryExhausted,
     hasManualCycleCompletedBefore,
     markManualCycleCompleted
 } from "./batchDataLoader.js";
@@ -1002,6 +1004,38 @@ Office.onReady(() => {
             ...tag(data.customers, "customer"),
             ...tag(data.vendors, "vendor")
         ];
+    }
+
+    /**
+     * Groups a Master Data Pull response into separate per-category
+     * record arrays instead of one combined ordered list — the source
+     * feeding the per-click Pull Master Data / Refresh Schedule batch
+     * queue (see takeNextManualBatchByCategory in batchDataLoader.js),
+     * so that every batch pulls up to MANUAL_REFRESH_BATCH_SIZE records
+     * from EACH category (company, accounts, classes, locations,
+     * customers, vendors) together, the same 10-per-API-per-batch shape
+     * the backend already fetches with — instead of 10 total records
+     * pulled from wherever one shared flattened cursor happens to land,
+     * which could be all customers and nothing else for several clicks
+     * in a row.
+     * @param {object} data - Master Data Pull response
+     * @returns {{company: object[], account: object[], class: object[], location: object[], customer: object[], vendor: object[]}}
+     */
+    function groupAllMasterDataRecordsByCategory(data) {
+        const clean = (list) => (Array.isArray(list) ? list.filter(Boolean) : []);
+        if (!data) {
+            return { company: [], account: [], class: [], location: [], customer: [], vendor: [] };
+        }
+        const rawCompanies = Array.isArray(data.company) ? data.company : (data.company ? [data.company] : []);
+
+        return {
+            company: clean(rawCompanies),
+            account: clean(data.accounts),
+            class: clean(data.classes),
+            location: clean(data.locations),
+            customer: clean(data.customers),
+            vendor: clean(data.vendors)
+        };
     }
 
     const ExcelService = {
@@ -4164,7 +4198,7 @@ Office.onReady(() => {
                     // regardless of which button reads it; the ERP is only
                     // called again once that shared queue is fully drained.
                     let queue = getManualBatchQueue(provider, companyId);
-                    const queueExhausted = !queue || queue.nextIndex >= queue.records.length;
+                    const queueExhausted = !queue || isManualBatchByCategoryExhausted(queue.dataByCategory, queue.cursors);
 
                     if (queueExhausted) {
                         DashboardService.addLog(`Pulling master data from ${providerLabel}...`);
@@ -4208,11 +4242,18 @@ Office.onReady(() => {
                             return;
                         }
 
-                        queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
+                        // Grouped by category (not one flattened list) so
+                        // each batch below pulls up to
+                        // MANUAL_REFRESH_BATCH_SIZE records from EVERY
+                        // category together — company, accounts, classes,
+                        // locations, customers, AND vendors all at once per
+                        // batch — instead of 10 total records from wherever
+                        // one shared cursor happens to land.
+                        queue = { dataByCategory: groupAllMasterDataRecordsByCategory(data), cursors: {} };
                     }
 
-                    const { batch, nextIndex, isDone, total } =
-                        takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
+                    const { batch, cursors, isDone } =
+                        takeNextManualBatchByCategory(queue.dataByCategory, queue.cursors, MANUAL_REFRESH_BATCH_SIZE);
 
                     await ExcelService.appendManualBatch(provider, batch);
 
@@ -4221,7 +4262,7 @@ Office.onReady(() => {
                         markManualCycleCompleted(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
-                        setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
+                        setManualBatchQueue(provider, companyId, { dataByCategory: queue.dataByCategory, cursors });
                     }
 
                     const pullTitle = isDone ? "Data completed." : "Batch written.";
@@ -4395,7 +4436,7 @@ Office.onReady(() => {
                     // does the next click go back to the ERP for a fresh
                     // pull.
                     let queue = getManualBatchQueue(provider, companyId);
-                    const queueExhausted = !queue || queue.nextIndex >= queue.records.length;
+                    const queueExhausted = !queue || isManualBatchByCategoryExhausted(queue.dataByCategory, queue.cursors);
 
                     if (queueExhausted) {
                         DashboardService.addLog(`Refreshing live data from ${providerLabel}...`);
@@ -4439,11 +4480,16 @@ Office.onReady(() => {
                             return;
                         }
 
-                        queue = { records: flatQueue, nextIndex: 0, total: flatQueue.length };
+                        // Grouped by category — see handlePullClick above for
+                        // why: every batch pulls up to
+                        // MANUAL_REFRESH_BATCH_SIZE records from EACH
+                        // category together, matching the backend's
+                        // concurrent 10-per-API batch shape.
+                        queue = { dataByCategory: groupAllMasterDataRecordsByCategory(data), cursors: {} };
                     }
 
-                    const { batch, nextIndex, isDone, total } =
-                        takeNextManualBatch(queue.records, queue.nextIndex, MANUAL_REFRESH_BATCH_SIZE);
+                    const { batch, cursors, isDone } =
+                        takeNextManualBatchByCategory(queue.dataByCategory, queue.cursors, MANUAL_REFRESH_BATCH_SIZE);
 
                     await ExcelService.appendManualBatch(provider, batch);
 
@@ -4455,7 +4501,7 @@ Office.onReady(() => {
                         markManualCycleCompleted(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
-                        setManualBatchQueue(provider, companyId, { records: queue.records, nextIndex, total });
+                        setManualBatchQueue(provider, companyId, { dataByCategory: queue.dataByCategory, cursors });
                     }
 
                     const refreshTitle = isDone ? "Data completed." : "Batch written.";

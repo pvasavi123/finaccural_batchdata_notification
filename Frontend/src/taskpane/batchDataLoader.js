@@ -406,6 +406,71 @@ export function clearManualBatchQueue(provider, companyId) {
  * @param {number} [batchSize=MANUAL_REFRESH_BATCH_SIZE]
  * @returns {{batch: any[], nextIndex: number, isDone: boolean, total: number, batchStart: number, batchEnd: number}}
  */
+/**
+ * Per-category counterpart to takeNextManualBatch above — instead of
+ * slicing the next `batchSize` records off ONE combined flattened list
+ * (which could hand back, say, 10 customers and nothing else if that's
+ * wherever the combined cursor happened to land), this slices up to
+ * `batchSize` records from EVERY category independently and returns
+ * them all together as one batch: batch 1 is up to 10 customers + up to
+ * 10 vendors + up to 10 accounts + up to 10 classes + up to 10
+ * locations (+ company, which is usually just 1 record) all at once,
+ * batch 2 is the next 10 of each, and so on — matching the same
+ * concurrent, 10-per-API batch shape the backend already fetches with.
+ *
+ * Each category's cursor advances and exhausts independently, exactly
+ * like takeNextManualBatch: a category with fewer than `batchSize`
+ * records left in this round contributes whatever it has and is simply
+ * done contributing after that, while other categories keep going in
+ * later batches. Pure function — does not touch storage; callers
+ * persist (or clear) the returned cursors themselves based on `isDone`.
+ *
+ * @param {Object<string, any[]>} dataByCategory - e.g. { company, account, class, location, customer, vendor }, each an array of raw records
+ * @param {Object<string, number>} cursors - how many records already taken per category (missing/undefined treated as 0)
+ * @param {number} [batchSize=MANUAL_REFRESH_BATCH_SIZE]
+ * @returns {{batch: {category: string, record: object}[], cursors: Object<string, number>, isDone: boolean}}
+ */
+export function takeNextManualBatchByCategory(dataByCategory, cursors, batchSize = MANUAL_REFRESH_BATCH_SIZE) {
+  const source = dataByCategory && typeof dataByCategory === "object" ? dataByCategory : {};
+  const priorCursors = cursors && typeof cursors === "object" ? cursors : {};
+  const nextCursors = { ...priorCursors };
+  const batch = [];
+  let isDone = true;
+
+  for (const category of Object.keys(source)) {
+    const list = Array.isArray(source[category]) ? source[category] : [];
+    const start = Math.max(0, Number.isInteger(priorCursors[category]) ? priorCursors[category] : 0);
+    const slice = list.slice(start, start + batchSize);
+
+    slice.forEach(record => batch.push({ category, record }));
+    nextCursors[category] = start + slice.length;
+
+    if (nextCursors[category] < list.length) isDone = false;
+  }
+
+  return { batch, cursors: nextCursors, isDone };
+}
+
+/**
+ * Whether a per-category manual batch queue (see
+ * takeNextManualBatchByCategory) has been fully drained across every
+ * category — i.e. every category's cursor has caught up to that
+ * category's record count. Mirrors the `!queue || queue.nextIndex >=
+ * queue.records.length` check the flat-list queue used inline.
+ * @param {Object<string, any[]>} dataByCategory
+ * @param {Object<string, number>} cursors
+ * @returns {boolean}
+ */
+export function isManualBatchByCategoryExhausted(dataByCategory, cursors) {
+  if (!dataByCategory || typeof dataByCategory !== "object") return true;
+  const safeCursors = cursors && typeof cursors === "object" ? cursors : {};
+  return Object.keys(dataByCategory).every(category => {
+    const list = Array.isArray(dataByCategory[category]) ? dataByCategory[category] : [];
+    const cur = Number.isInteger(safeCursors[category]) ? safeCursors[category] : 0;
+    return cur >= list.length;
+  });
+}
+
 export function takeNextManualBatch(records, nextIndex, batchSize = MANUAL_REFRESH_BATCH_SIZE) {
   const list = Array.isArray(records) ? records : [];
   const start = Math.max(0, Number.isInteger(nextIndex) ? nextIndex : 0);

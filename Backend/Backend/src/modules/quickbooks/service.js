@@ -534,13 +534,37 @@ class QuickBooksService {
      */
     static async _fetchAllPaginatedEntitiesForToken(token, pageSize = 10) {
         const entities = ['Customer', 'Vendor', 'Account', 'Class', 'Department'];
+        const entityLabel = { Customer: 'Customers', Vendor: 'Vendors', Account: 'Accounts', Class: 'Classes', Department: 'Locations' };
         const recordsByEntity = { Customer: [], Vendor: [], Account: [], Class: [], Department: [] };
         let active = entities.slice();
         let startPosition = 1;
+        let batchNumber = 0;
+        const realmId = token.companyId || token.realm_id;
 
         while (active.length > 0) {
+            batchNumber += 1;
+            const batchStart = Date.now();
+
+            // ── TEMPORARY diagnostic logging ─────────────────────────
+            // Every still-active entity's START line is logged here,
+            // synchronously, BEFORE any of this batch's queryPage()
+            // promises are created/awaited — so all of a batch's START
+            // lines print together as one group, in one synchronous pass,
+            // regardless of how long the underlying HTTP responses take.
+            // If a batch's active entities were somehow being awaited one
+            // at a time instead of together, their START lines would be
+            // interleaved with RESPONSE lines from earlier entities in
+            // the same batch — this makes that failure mode visible.
+            active.forEach(entityName => {
+                console.log(`[BATCH ${batchNumber}][${entityLabel[entityName]}] START position=${startPosition} limit=${pageSize} realm=${realmId}`);
+            });
+
             // All still-active entities for this token start together —
-            // nothing here waits for another to finish first.
+            // nothing here waits for another to finish first. The array
+            // passed to Promise.all is built via .map(), which invokes
+            // queryPage() for every active entity synchronously (each
+            // call starts its HTTP request immediately); Promise.all only
+            // waits for all of them together, it does not serialize them.
             const pages = await Promise.all(active.map(entityName =>
                 QuickBooksService.queryPage(entityName, token, startPosition, pageSize)
             ));
@@ -548,6 +572,7 @@ class QuickBooksService {
             const stillActive = [];
             active.forEach((entityName, i) => {
                 const { records, hasMore } = pages[i];
+                console.log(`[BATCH ${batchNumber}][${entityLabel[entityName]}] RESPONSE count=${records.length} realm=${realmId} (+${Date.now() - batchStart}ms since this batch's requests started)`);
                 recordsByEntity[entityName].push(...records);
                 if (hasMore) stillActive.push(entityName);
             });
