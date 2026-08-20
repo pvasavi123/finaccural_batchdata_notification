@@ -260,12 +260,33 @@ router.patch('/connections/:id/rename', authenticate, validate(schemas.renameCon
     }
 });
  
-// GET /api/pull-master-data?companyId=...&platform=...&tier=...
+// GET /api/pull-master-data?companyId=...&platform=...&tier=...&cursor=...
 // Same ownership scoping — a companyId this user doesn't own returns "not
 // found" rather than silently pulling and returning another user's data.
+//
+// `cursor` (optional) is the JSON-encoded per-company, per-entity
+// pagination cursor returned as `cursor` by a PREVIOUS call. It MUST be
+// forwarded to the service and echoed back in the response: this is the
+// endpoint the Excel add-in's Pull Master Data / Refresh Schedule
+// buttons actually call, and without the round-trip every click would
+// silently restart the cycle at the first entity's first record instead
+// of advancing. Omitting it (or sending {}) starts a fresh cycle.
 router.get('/pull-master-data', authenticate, validate(schemas.pullMasterDataQuery, 'query'), async (req, res, next) => {
     try {
-        const { companyId, platform, tier } = req.query;
+        const { companyId, platform, tier, cursor } = req.query;
+
+        let cursorByCompany = {};
+        if (cursor) {
+            try {
+                const parsed = JSON.parse(cursor);
+                if (parsed && typeof parsed === 'object') cursorByCompany = parsed;
+            } catch (parseErr) {
+                // Malformed/tampered cursor — fail safe by starting a
+                // fresh cycle rather than throwing, since a bad cursor
+                // should never be able to break the Pull/Refresh button.
+                cursorByCompany = {};
+            }
+        }
  
         const mail = req.user.email;
         const normPlatform = platform.toLowerCase();
@@ -295,7 +316,7 @@ router.get('/pull-master-data', authenticate, validate(schemas.pullMasterDataQue
  
         if (normPlatform === 'quickbooks' && quickbooksRoutes) {
             const QuickBooksService = require('../modules/quickbooks/service');
-            aggregated = await QuickBooksService.pullMasterData(companyId, tier, mail);
+            aggregated = await QuickBooksService.pullMasterData(companyId, tier, mail, cursorByCompany);
         } else if (normPlatform === 'xero' && xeroRoutes) {
             const XeroService = require('../modules/xero/service');
             aggregated = await XeroService.pullMasterData(companyId, tier, mail);
@@ -317,6 +338,18 @@ router.get('/pull-master-data', authenticate, validate(schemas.pullMasterDataQue
             // one (append only isNew-flagged records) — see
             // QuickBooksService/XeroService.pullMasterData.
             isFirstSync: aggregated.isFirstSync,
+            // Pagination hand-back. The client stores `cursor` and sends
+            // it on its next click to continue the cycle; `isDone` tells
+            // it the cycle finished ("Data completed.") rather than
+            // "Batch written. Click Pull Master Data again...".
+            //
+            // A provider whose service doesn't paginate (Xero returns its
+            // whole dataset in one call) reports no `isDone` of its own —
+            // default that to true so the client shows "Data completed."
+            // once instead of looping on "Batch written." forever with a
+            // cursor that never advances.
+            cursor: aggregated.cursor,
+            isDone: aggregated.isDone === undefined ? true : aggregated.isDone,
             tokenRefreshed
         });
     } catch (err) {

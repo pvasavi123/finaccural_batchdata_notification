@@ -448,13 +448,46 @@ class QuickbooksController {
     };
 
     /**
-     * GET /api/quickbooks/pull-master-data?companyId=...&tier=...
+     * GET /api/quickbooks/pull-master-data?companyId=...&tier=...&cursor=...
+     *
+     * `cursor` (optional) is the JSON-encoded per-company, per-entity
+     * pagination cursor returned as `cursor` in a PREVIOUS call's
+     * response body. Omitting it (or sending {}) starts a fresh cycle at
+     * Accounts, position 1.
+     *
+     * Each call fetches exactly ONE page (up to 10 records) for exactly
+     * ONE entity — the entities are processed sequentially, in the order
+     * Accounts -> Classes -> Locations -> Customers -> Vendors, and an
+     * entity is drained completely before the next one starts (from its
+     * own first record). So on any given call four of the five record
+     * arrays in the response are empty, and no two APIs are ever fetched
+     * at the same time. See QuickBooksService.pullMasterData /
+     * _fetchOnePageForToken.
+     *
+     * A single button click therefore never silently pulls more than one
+     * batch; the caller must send the returned `cursor` back on its next
+     * click to continue, and `isDone: true` means every entity is
+     * exhausted and there is nothing left to fetch until the cycle is
+     * reset.
      */
     pullMasterData = async (req, res, next) => {
         try {
-            const { companyId, tier } = req.query;
+            const { companyId, tier, cursor } = req.query;
 
-            const aggregated = await QuickBooksService.pullMasterData(companyId, tier, req.user.email);
+            let cursorByCompany = {};
+            if (cursor) {
+                try {
+                    const parsed = JSON.parse(cursor);
+                    if (parsed && typeof parsed === 'object') cursorByCompany = parsed;
+                } catch (parseErr) {
+                    // Malformed/tampered cursor — fail safe by starting a
+                    // fresh cycle rather than throwing, since a bad cursor
+                    // should never be able to break the Pull/Refresh button.
+                    cursorByCompany = {};
+                }
+            }
+
+            const aggregated = await QuickBooksService.pullMasterData(companyId, tier, req.user.email, cursorByCompany);
 
             if (!aggregated) {
                 const { AppError } = require('../../core/errors/AppError');
@@ -468,7 +501,9 @@ class QuickbooksController {
                 accounts:  aggregated.accounts,
                 classes:   aggregated.classes,
                 locations: aggregated.locations,
-                isFirstSync: aggregated.isFirstSync
+                isFirstSync: aggregated.isFirstSync,
+                cursor: aggregated.cursor,
+                isDone: aggregated.isDone
             });
         } catch (err) {
             return next(err);

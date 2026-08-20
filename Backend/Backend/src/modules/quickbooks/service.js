@@ -584,6 +584,122 @@ class QuickBooksService {
         return recordsByEntity;
     }
 
+    /**
+     * Fixed order in which the paginated master-data APIs are pulled.
+     * ONE API is fully drained (10 records at a time, click by click)
+     * before the next one is even touched, and each API always starts
+     * back at its own first record — QuickBooks `STARTPOSITION 1` — no
+     * matter how far the previous API had paged.
+     *
+     * Accounts -> Classes -> Locations (QuickBooks `Department`) ->
+     * Customers -> Vendors.
+     */
+    static SEQUENTIAL_ENTITY_ORDER = ['Account', 'Class', 'Department', 'Customer', 'Vendor'];
+
+    /**
+     * Fetches exactly ONE page (up to pageSize records) for exactly ONE
+     * entity per call — the click-scoped counterpart to
+     * _fetchAllPaginatedEntitiesForToken above, which loops internally
+     * until every entity is exhausted in one call. This is what lets
+     * pullMasterData make exactly one real MAXRESULTS=10 QuickBooks
+     * request per Pull Master Data / Refresh Schedule click, instead of
+     * silently fetching the whole dataset in one HTTP call and only
+     * showing part of it — the click IS the pagination trigger, driven
+     * by a caller-supplied per-entity cursor rather than an internal
+     * while loop.
+     *
+     * The entities are processed STRICTLY SEQUENTIALLY, in
+     * SEQUENTIAL_ENTITY_ORDER: Accounts is paged 10 at a time until it
+     * is completely finished, and only then does Classes begin — from
+     * ITS first record (position 1), not from wherever Accounts stopped.
+     * Then Locations, then Customers, then Vendors, each on the same
+     * "start at 1, drain fully, hand over" basis. At most one entity's
+     * request is ever in flight, so batches from two different APIs can
+     * never overlap. (Contrast _fetchAllPaginatedEntitiesForToken, which
+     * still runs all five concurrently for the bulk export path.)
+     *
+     * A click never returns an empty batch just because the entity it
+     * landed on happened to be exhausted: when an entity's page comes
+     * back with zero records, its cursor is closed out and the SAME
+     * click moves on to the next entity in the order, so every click
+     * either writes real records or reports the whole cycle done.
+     *
+     * @param {object} token
+     * @param {{[entity: string]: {position: number, done: boolean}}|null} priorCursor
+     *   Per-entity cursor returned by this function on a previous click
+     *   for this same token, or null/undefined to start a fresh cycle
+     *   (Accounts at position 1, nothing done yet).
+     * @param {number} [pageSize=10]
+     * @returns {Promise<{
+     *   recordsByEntity: { Customer: object[], Vendor: object[], Account: object[], Class: object[], Department: object[] },
+     *   cursor: {[entity: string]: {position: number, done: boolean}},
+     *   isDone: boolean
+     * }>}
+     */
+    static async _fetchOnePageForToken(token, priorCursor, pageSize = 10) {
+        const entities = QuickBooksService.SEQUENTIAL_ENTITY_ORDER;
+        const entityLabel = { Account: 'Accounts', Class: 'Classes', Department: 'Locations', Customer: 'Customers', Vendor: 'Vendors' };
+        const realmId = token.companyId || token.realm_id;
+        const safePriorCursor = priorCursor && typeof priorCursor === 'object' ? priorCursor : {};
+
+        const recordsByEntity = { Customer: [], Vendor: [], Account: [], Class: [], Department: [] };
+        const nextCursor = { ...safePriorCursor };
+
+        const isEntityDone = (entityName) => !!(nextCursor[entityName] && nextCursor[entityName].done);
+
+        // Walk the fixed order and stop at the first entity that still
+        // has records left — that single entity owns this whole click.
+        // The loop only ever iterates more than once when the entity it
+        // lands on turns out to be exhausted (a zero-record page), in
+        // which case that entity is closed out and the next one in the
+        // order takes over the click rather than wasting it.
+        for (const entityName of entities) {
+            if (isEntityDone(entityName)) continue;
+
+            // Each API starts from its own first record. A cursor entry
+            // only exists once THIS entity has been paged before, so a
+            // freshly reached entity always begins at STARTPOSITION 1 —
+            // the previous entity's position never carries over.
+            const startPosition = (safePriorCursor[entityName] && safePriorCursor[entityName].position) || 1;
+
+            console.log(`[PAGE][${entityLabel[entityName]}] START position=${startPosition} limit=${pageSize} realm=${realmId}`);
+            const { records, hasMore } = await QuickBooksService.queryPage(entityName, token, startPosition, pageSize);
+            console.log(`[PAGE][${entityLabel[entityName]}] RESPONSE count=${records.length} realm=${realmId}`);
+
+            nextCursor[entityName] = {
+                position: startPosition + pageSize,
+                done: !hasMore
+            };
+
+            if (records.length === 0) {
+                // This entity had nothing left (its record count was an
+                // exact multiple of pageSize, so the previous click
+                // couldn't tell it was finished). It's now closed out;
+                // hand this click to the next API instead of returning
+                // an empty "Batch written".
+                console.log(`[PAGE][${entityLabel[entityName]}] COMPLETED realm=${realmId} — moving to next API`);
+                continue;
+            }
+
+            recordsByEntity[entityName] = records;
+            if (!hasMore) {
+                console.log(`[PAGE][${entityLabel[entityName]}] COMPLETED realm=${realmId}`);
+            }
+
+            // Exactly one API's batch per click — nothing else is
+            // fetched, even though later entities are still pending.
+            return {
+                recordsByEntity,
+                cursor: nextCursor,
+                isDone: entities.every(isEntityDone)
+            };
+        }
+
+        // Every entity in the order finished — either on earlier clicks
+        // or just now, in the loop above.
+        return { recordsByEntity, cursor: nextCursor, isDone: true };
+    }
+
     // ── Self-contained Connections Management & Pulling ────────────────
 
     static PLAN_LIMITS = { trial: 1, basic: 1, standard: 3, pro: 10 };
@@ -693,8 +809,19 @@ class QuickBooksService {
      *   their Excel sheet with) another user's financial data, and a
      *   bulk (no companyId) pull would aggregate every user's connections
      *   in the system into one response.
+     * @param {{[companyId: string]: {[entity: string]: {position: number, done: boolean}}}} [cursorByCompany]
+     *   Per-company, per-entity pagination cursor returned by this same
+     *   function on a previous click, or {}/undefined to start a fresh
+     *   cycle. Each call fetches exactly ONE page (up to 10 records) for
+     *   exactly ONE entity per token, walking the APIs strictly in order
+     *   — Accounts, then Classes, then Locations, then Customers, then
+     *   Vendors, each drained completely and each starting from its own
+     *   first record — see _fetchOnePageForToken. So the caller (the
+     *   Pull Master Data / Refresh Schedule click handler) controls
+     *   pagination one click at a time instead of this function eagerly
+     *   fetching everything and the frontend slicing it.
      */
-    static async pullMasterData(companyId, tier, mail) {
+    static async pullMasterData(companyId, tier, mail, cursorByCompany) {
         if (!mail) return null;
         const { QuickBooksToken } = require('../../core/database');
         const { Op } = require('sequelize');
@@ -719,18 +846,25 @@ class QuickBooksService {
             lastSyncedAt: t.last_synced_at
         }));
 
+        const safeCursorByCompany = cursorByCompany && typeof cursorByCompany === 'object' ? cursorByCompany : {};
+
         const results = await Promise.all(tokens.map(async (token) => {
             try {
                 const rawComp = await QuickBooksService.executeQuery('SELECT * FROM CompanyInfo', token);
                 const comp = QuickBooksMapper.toCompanyInfo(rawComp);
                 const companyList = comp ? [{ ...comp, id: token.companyId }] : [];
 
-                // Concurrent, 10-records-per-batch fetch across all 5
-                // paginated entities for this token — see
-                // _fetchAllPaginatedEntitiesForToken. CompanyInfo above is
-                // deliberately outside this loop: it's a single record per
-                // company, not paginated.
-                const pagedEntities = await QuickBooksService._fetchAllPaginatedEntitiesForToken(token, 10);
+                // Exactly ONE page (up to 10 records) of exactly ONE
+                // entity for THIS click — the APIs are drained one at a
+                // time in a fixed order, so four of the five lists below
+                // are always empty on any given click. See
+                // _fetchOnePageForToken. CompanyInfo above is
+                // deliberately outside pagination: it's a single record
+                // per company, refetched every click regardless of where
+                // the entity pagination cursor is.
+                const priorCursor = safeCursorByCompany[token.companyId] || null;
+                const pageResult = await QuickBooksService._fetchOnePageForToken(token, priorCursor, 10);
+                const pagedEntities = pageResult.recordsByEntity;
                 const rawCust  = { QueryResponse: { Customer:   pagedEntities.Customer } };
                 const rawVend  = { QueryResponse: { Vendor:     pagedEntities.Vendor } };
                 const rawAcc   = { QueryResponse: { Account:    pagedEntities.Account } };
@@ -749,8 +883,18 @@ class QuickBooksService {
                 // record's isNew is false in both cases).
                 const isFirstSync = !token.lastSyncedAt;
 
+                // last_synced_at only advances once this token's cycle has
+                // actually finished (every entity's cursor is done) — not
+                // on every intermediate single-page click. That keeps
+                // isNew/isUpdated flagging (toXList compares each click's
+                // page against token.lastSyncedAt) anchored to the last
+                // COMPLETE sync across every click of an in-progress
+                // cycle, and keeps isFirstSync accurate for every click of
+                // a first cycle instead of flipping to false after click 1.
                 await QuickBooksToken.update(
-                    { last_synced_at: new Date(), status: 'Active' },
+                    pageResult.isDone
+                        ? { last_synced_at: new Date(), status: 'Active' }
+                        : { status: 'Active' },
                     { where: { realm_id: token.companyId } }
                 );
 
@@ -761,7 +905,10 @@ class QuickBooksService {
                     accounts: tag(QuickBooksMapper.toAccountList(rawAcc, token.lastSyncedAt)),
                     classes: tag(QuickBooksMapper.toClassList(rawClass, token.lastSyncedAt)),
                     locations: tag(QuickBooksMapper.toLocationList(rawLoc, token.lastSyncedAt)),
-                    isFirstSync
+                    isFirstSync,
+                    companyIdForCursor: token.companyId,
+                    cursor: pageResult.cursor,
+                    isDone: pageResult.isDone
                 };
             } catch (err) {
                 logger.error(`Error pulling QB data for connection ${token.companyId}:`, err.message);
@@ -799,7 +946,7 @@ class QuickBooksService {
             }
         }));
 
-        return results.reduce((acc, curr) => ({
+        const aggregated = results.reduce((acc, curr) => ({
             company: [...acc.company, ...curr.company],
             customers: [...acc.customers, ...curr.customers],
             vendors: [...acc.vendors, ...curr.vendors],
@@ -813,8 +960,25 @@ class QuickBooksService {
             // them is — mixing "never synced" and "already synced" here
             // would otherwise leave it ambiguous which single answer to
             // give the frontend for a mixed batch.
-            isFirstSync: acc.isFirstSync && curr.isFirstSync
-        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [], isFirstSync: true });
+            isFirstSync: acc.isFirstSync && curr.isFirstSync,
+            // Same AND-merge logic applied to pagination completeness:
+            // a bulk pull only counts as "fully done" for this click's
+            // cycle once every one of its tokens' entities are exhausted.
+            isDone: acc.isDone && !!curr.isDone
+        }), { company: [], customers: [], vendors: [], accounts: [], classes: [], locations: [], isFirstSync: true, isDone: true });
+
+        // Per-company cursor map the caller must send back on its next
+        // click to continue this cycle where this click left off (or to
+        // detect that every token is already done and no next click is
+        // needed until the cycle is manually reset).
+        aggregated.cursor = {};
+        results.forEach(r => {
+            if (r && r.companyIdForCursor) {
+                aggregated.cursor[r.companyIdForCursor] = r.cursor;
+            }
+        });
+
+        return aggregated;
     }
 }
 

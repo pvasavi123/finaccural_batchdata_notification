@@ -16,15 +16,9 @@
 
 import { writeRowsInBatches } from "./batchDataLoader.js";
 import {
-    MANUAL_REFRESH_BATCH_SIZE,
-    getManualBatchQueue,
-    setManualBatchQueue,
-    clearManualBatchQueue,
-    takeNextManualBatch,
-    takeNextManualBatchByCategory,
-    isManualBatchByCategoryExhausted,
-    hasManualCycleCompletedBefore,
-    markManualCycleCompleted
+    getPullPageCursor,
+    setPullPageCursor,
+    clearPullPageCursor
 } from "./batchDataLoader.js";
 import {
     ERROR_CODES,
@@ -809,9 +803,17 @@ Office.onReady(() => {
          * Pulls master metadata from ERP APIs via the unified backend pull endpoint.
          * @param {string} provider  - The active ERP provider ("quickbooks" | "xero")
          * @param {string} companyId - Selected company identifier
-         * @returns {Promise<object>} Map of company, customers, vendors, accounts, classes, locations
+         * @param {object|null} [cursor] - Per-entity pagination cursor
+         *   returned as `cursor` on a previous call, or omit/null to start
+         *   a fresh pull cycle. The backend fetches exactly ONE page (up
+         *   to 10 records) of exactly ONE entity for THIS call only — the
+         *   entities are drained one at a time, in the fixed order
+         *   Accounts -> Classes -> Locations -> Customers -> Vendors — so
+         *   four of the five record arrays come back empty on any given
+         *   call, and the whole dataset is never fetched at once.
+         * @returns {Promise<object>} Map of company, customers, vendors, accounts, classes, locations, plus `cursor` (pass to the next call to continue) and `isDone` (true once every entity is exhausted).
          */
-        async fetchMasterData(provider, companyId) {
+        async fetchMasterData(provider, companyId, cursor) {
             // const apiErr = { code: ERROR_CODES.QB_SUBSCRIPTION_EXPIRED, message: "Your QuickBooks subscription has expired" };
             // ApiService.handleGlobalApiError(apiErr);
             // throw apiErr;
@@ -820,6 +822,9 @@ Office.onReady(() => {
                 platform: provider || "",
                 tier: AppState.currentTier || ""
             });
+            if (cursor) {
+                params.set("cursor", JSON.stringify(cursor));
+            }
             const res = await this.apiFetch(`/api/pull-master-data?${params.toString()}`, {
                 method: "GET"
             });
@@ -981,61 +986,40 @@ Office.onReady(() => {
      * an org with no other data yet still gets its name row seeded, same
      * as ExcelService.writeMasterData already does), then accounts,
      * classes, locations, customers, and vendors, matching the section
-     * order/precedence writeMasterData writes in. This is the source
-     * list the manual per-click Pull Master Data queue
-     * (MANUAL_REFRESH_BATCH_SIZE records at a time) is built from — see
-     * ExcelService.appendManualBatch's "company" case and
-     * batchDataLoader.js's manual batch queue helpers.
+     * order/precedence writeMasterData writes in — which is also the
+     * order the backend drains the APIs in. This is what a single Pull
+     * Master Data / Refresh Schedule click's one-page server response
+     * (up to 10 records, of ONE entity only — see
+     * ApiService.fetchMasterData's `cursor` param) gets turned into
+     * before being handed to ExcelService.appendManualBatch; the other
+     * four categories are simply empty on that click.
      *
      * @param {object} data - Master Data Pull response
+     * @param {Object} [options]
+     * @param {boolean} [options.includeCompany=true] - Whether to include
+     *   the "company" (org header) entries. CompanyInfo is NOT paginated
+     *   — the backend refetches and returns it on every single-page pull
+     *   call within a cycle, not just the first — so callers paging
+     *   through a cycle one click at a time must pass `false` here on
+     *   every click after the cycle's first, or every later click would
+     *   re-seed a duplicate, contentless org header row on the sheet.
      * @returns {{category: "company"|"account"|"class"|"location"|"customer"|"vendor", record: object}[]}
      */
-    function flattenAllMasterDataRecords(data) {
+    function flattenAllMasterDataRecords(data, options = {}) {
         if (!data) return [];
+        const { includeCompany = true } = options;
         const tag = (list, category) =>
             Array.isArray(list) ? list.filter(Boolean).map(record => ({ category, record })) : [];
         const rawCompanies = Array.isArray(data.company) ? data.company : (data.company ? [data.company] : []);
 
         return [
-            ...tag(rawCompanies, "company"),
+            ...(includeCompany ? tag(rawCompanies, "company") : []),
             ...tag(data.accounts, "account"),
             ...tag(data.classes, "class"),
             ...tag(data.locations, "location"),
             ...tag(data.customers, "customer"),
             ...tag(data.vendors, "vendor")
         ];
-    }
-
-    /**
-     * Groups a Master Data Pull response into separate per-category
-     * record arrays instead of one combined ordered list — the source
-     * feeding the per-click Pull Master Data / Refresh Schedule batch
-     * queue (see takeNextManualBatchByCategory in batchDataLoader.js),
-     * so that every batch pulls up to MANUAL_REFRESH_BATCH_SIZE records
-     * from EACH category (company, accounts, classes, locations,
-     * customers, vendors) together, the same 10-per-API-per-batch shape
-     * the backend already fetches with — instead of 10 total records
-     * pulled from wherever one shared flattened cursor happens to land,
-     * which could be all customers and nothing else for several clicks
-     * in a row.
-     * @param {object} data - Master Data Pull response
-     * @returns {{company: object[], account: object[], class: object[], location: object[], customer: object[], vendor: object[]}}
-     */
-    function groupAllMasterDataRecordsByCategory(data) {
-        const clean = (list) => (Array.isArray(list) ? list.filter(Boolean) : []);
-        if (!data) {
-            return { company: [], account: [], class: [], location: [], customer: [], vendor: [] };
-        }
-        const rawCompanies = Array.isArray(data.company) ? data.company : (data.company ? [data.company] : []);
-
-        return {
-            company: clean(rawCompanies),
-            account: clean(data.accounts),
-            class: clean(data.classes),
-            location: clean(data.locations),
-            customer: clean(data.customers),
-            vendor: clean(data.vendors)
-        };
     }
 
     const ExcelService = {
@@ -1297,11 +1281,12 @@ Office.onReady(() => {
          * like appendNewMasterData's writer, just parametrized on a
          * pre-sliced list instead of a raw Master Data Pull response.
          *
-         * This is what the manual, click-driven "MANUAL_REFRESH_BATCH_SIZE
-         * records per click" workflow calls directly with a single
-         * batch slice; appendNewMasterData (the un-batched "write everything
-         * new" path) now delegates here too, passing its whole flattened
-         * list in one call, so both paths share one writer.
+         * This is what Pull Master Data / Refresh Schedule call directly
+         * with a single click's worth of records (one server-paginated
+         * page — up to 10 per entity); appendNewMasterData (the un-batched
+         * "write everything new" path) now delegates here too, passing
+         * its whole flattened list in one call, so both paths share one
+         * writer.
          *
          * @param {string} provider - Active ERP provider ("quickbooks" | "xero")
          * @param {{category: string, record: object}[]} batch
@@ -1364,79 +1349,128 @@ Office.onReady(() => {
             await Excel.run(async (context) => {
                 const sheet = context.workbook.worksheets.getItem("1.Master_Data");
 
-                // Find the first fully-blank row below whatever is already
-                // on the sheet, so this batch starts exactly one blank row
-                // after the last existing one — derived from the sheet's
-                // own used range rather than any separately-tracked
-                // position, so it stays correct even if the sheet was
-                // touched between refreshes.
-                const usedRange = sheet.getUsedRangeOrNullObject();
-                usedRange.load(["rowIndex", "rowCount", "isNullObject"]);
+                // The sheet holds FIVE independent tables side by side, each
+                // in its own column block, all sharing the single header row
+                // written once by setupWorkbookSheets (row 1 — never
+                // rewritten here). Each block therefore has its own next-free
+                // row: appending is per block, not per sheet.
+                //
+                // This matters because the backend drains one API at a time
+                // (Accounts fully, then Classes, then Locations, then
+                // Customers/Vendors). A batch of 10 classes must land at the
+                // top of the Classes block, directly under the last class
+                // already written — NOT below the accounts that happen to
+                // occupy rows further down the sheet. Positioning off the
+                // whole sheet's used range would push each new table down
+                // past every earlier one, leaving a staircase of blank rows
+                // above it.
+                //
+                // Each block's next row is derived from that block's own used
+                // range, so it stays correct even if the sheet was edited
+                // between refreshes, and rows land contiguously with no gap
+                // between batches.
+                const BLOCKS = {
+                    company:   { first: "A", last: "B" },
+                    accounts:  { first: "D", last: "L" },
+                    classes:   { first: "N", last: "Q" },
+                    locations: { first: "S", last: "V" },
+                    entities:  { first: "X", last: "AB" }
+                };
+
+                const usedByBlock = {};
+                for (const [key, { first, last }] of Object.entries(BLOCKS)) {
+                    const used = sheet.getRange(`${first}2:${last}10000`).getUsedRangeOrNullObject();
+                    used.load(["rowIndex", "rowCount", "isNullObject"]);
+                    usedByBlock[key] = used;
+                }
+
+                // Org names already present in column A. The org row is an
+                // identity row for the client, not a per-batch banner: it is
+                // written once, on whichever batch first introduces that org,
+                // and every later batch skips it. Deriving that from the
+                // sheet itself (rather than a "is this the first batch?"
+                // flag) makes it idempotent — a repeated or replayed batch
+                // still cannot duplicate the row.
+                const existingOrgColumn = sheet.getRange("A2:A10000");
+                existingOrgColumn.load("values");
+
                 await context.sync();
 
-                const lastUsedRow1Indexed = usedRange.isNullObject ? 1 : (usedRange.rowIndex + usedRange.rowCount);
-                let currentRow = Math.max(2, lastUsedRow1Indexed + 1);
+                // usedRange.rowIndex is 0-based and rowCount is a length, so
+                // (rowIndex + rowCount) is the 1-based index of the LAST used
+                // row; the next free row is one past it. An empty block
+                // starts at row 2, directly beneath the header.
+                const nextRowFor = (key) => {
+                    const used = usedByBlock[key];
+                    return used.isNullObject ? 2 : used.rowIndex + used.rowCount + 1;
+                };
+
+                const rowFor = {};
+                for (const key of Object.keys(BLOCKS)) rowFor[key] = nextRowFor(key);
+
+                const seenOrgNames = new Set(
+                    (existingOrgColumn.values || [])
+                        .map(row => (row && row[0] != null ? String(row[0]).trim() : ""))
+                        .filter(Boolean)
+                );
+
+                /**
+                 * Writes one block's rows at that block's own next free row
+                 * and advances it, so consecutive batches stack without gaps.
+                 */
+                const writeBlock = async (key, values) => {
+                    if (!values.length) return;
+                    const { first, last } = BLOCKS[key];
+                    const startRow = rowFor[key];
+
+                    await writeRowsInBatches(context, sheet, first, last, startRow, values, values.map(() => false));
+
+                    const written = sheet.getRange(`${first}${startRow}:${last}${startRow + values.length - 1}`);
+                    written.format.font.size = 11;
+                    written.format.wrapText = true;
+
+                    rowFor[key] = startRow + values.length;
+                };
 
                 for (const [, group] of orgGroupsMap) {
                     const orgName = group.name;
-                    const accCount = group.accounts.length;
-                    const classCount = group.classes.length;
-                    const locCount = group.locations.length;
-                    const entityCount = group.entities.length;
-                    const maxRows = Math.max(1, accCount, classCount, locCount, entityCount);
 
-                    sheet.getRange(`A${currentRow}:B${currentRow}`).values = [[orgName, orgName]];
-
-                    if (accCount > 0) {
-                        const accValues = group.accounts.map(a => [
-                            orgName,
-                            a.acctNum || a.code || a.AcctNum || a.Code || "",
-                            a.name || a.Name || "",
-                            a.accountType || a.type || a.AccountType || a.Type || "",
-                            a.accountSubType || a.description || a.AccountSubType || "",
-                            a.classification || a.Classification || "",
-                            a.fullyQualifiedName || a.name || a.Name || "",
-                            a.active !== undefined ? (a.active ? "Active" : "Inactive") : "Active",
-                            a.id || a.Id || a.AccountID || ""
-                        ]);
-                        await writeRowsInBatches(context, sheet, "D", "L", currentRow, accValues, accValues.map(() => false));
+                    // Header/identity row for this client — only if the sheet
+                    // doesn't already carry it.
+                    if (!seenOrgNames.has(orgName.trim())) {
+                        await writeBlock("company", [[orgName, orgName]]);
+                        seenOrgNames.add(orgName.trim());
                     }
 
-                    if (classCount > 0) {
-                        const classValues = group.classes.map(c => [
-                            orgName,
-                            c.name || c.Name || "",
-                            c.id || c.Id || "",
-                            c.active !== undefined ? (c.active ? "Active" : "Inactive") : "Active"
-                        ]);
-                        await writeRowsInBatches(context, sheet, "N", "Q", currentRow, classValues, classValues.map(() => false));
-                    }
+                    await writeBlock("accounts", group.accounts.map(a => [
+                        orgName,
+                        a.acctNum || a.code || a.AcctNum || a.Code || "",
+                        a.name || a.Name || "",
+                        a.accountType || a.type || a.AccountType || a.Type || "",
+                        a.accountSubType || a.description || a.AccountSubType || "",
+                        a.classification || a.Classification || "",
+                        a.fullyQualifiedName || a.name || a.Name || "",
+                        a.active !== undefined ? (a.active ? "Active" : "Inactive") : "Active",
+                        a.id || a.Id || a.AccountID || ""
+                    ]));
 
-                    if (locCount > 0) {
-                        const locValues = group.locations.map(l => [
-                            orgName,
-                            l.name || l.Name || "",
-                            l.id || l.Id || "",
-                            l.active !== undefined ? (l.active ? "Active" : "Inactive") : "Active"
-                        ]);
-                        await writeRowsInBatches(context, sheet, "S", "V", currentRow, locValues, locValues.map(() => false));
-                    }
+                    await writeBlock("classes", group.classes.map(c => [
+                        orgName,
+                        c.name || c.Name || "",
+                        c.id || c.Id || "",
+                        c.active !== undefined ? (c.active ? "Active" : "Inactive") : "Active"
+                    ]));
 
-                    if (entityCount > 0) {
-                        const entityValues = group.entities.map(e => [orgName, e.name, e.type, e.id, e.status]);
-                        await writeRowsInBatches(context, sheet, "X", "AB", currentRow, entityValues, entityValues.map(() => false));
-                    }
+                    await writeBlock("locations", group.locations.map(l => [
+                        orgName,
+                        l.name || l.Name || "",
+                        l.id || l.Id || "",
+                        l.active !== undefined ? (l.active ? "Active" : "Inactive") : "Active"
+                    ]));
 
-                    const rangeToFormat = sheet.getRange(`A${currentRow}:AB${currentRow + maxRows - 1}`);
-                    rangeToFormat.format.font.size = 11;
-                    rangeToFormat.format.wrapText = true;
-
-                    // No extra gap between orgs within a single batch — the
-                    // spec calls for exactly one blank row between whole
-                    // refresh batches, not between organizations inside
-                    // one; that one-row gap is already accounted for above
-                    // when currentRow was first computed.
-                    currentRow += maxRows;
+                    await writeBlock("entities", group.entities.map(e => [
+                        orgName, e.name, e.type, e.id, e.status
+                    ]));
                 }
 
                 sheet.getRange("A:AB").format.columnWidth = 115;
@@ -2959,6 +2993,28 @@ Office.onReady(() => {
         },
 
         /**
+         * Inverse of markStepComplete — clears a persisted step flag so
+         * the progress indicator stops showing it as done. Used when Pull
+         * Master Data restarts a cycle from scratch: the previous cycle's
+         * "pull complete" tick no longer describes the sheet, which is
+         * back to holding only the first batch.
+         * @param {"connect"|"setup"|"pull"} stepName
+         */
+        markStepIncomplete(stepName) {
+            if (stepName === "setup" || stepName === "pull") {
+                const provider = AppState.currentProvider === "quickbooks" ? "quickbooks" : "xero";
+                const key = this._stepStateKey(provider, AppState.currentCompanyId);
+                const state = this._loadStepState();
+                if (state[key]) {
+                    state[key] = { ...state[key] };
+                    delete state[key][stepName];
+                    this._saveStepState(state);
+                }
+            }
+            this.applyStepState();
+        },
+
+        /**
          * Marks a progress step as complete (connected-dashboard console).
          * @param {string} step - base step ID ("stepConnect"|"stepSetup"|"stepPull")
          */
@@ -4164,20 +4220,32 @@ Office.onReady(() => {
             // Pull Data button in provider-selected state
             // Pull Master Data buttons (provider-selected + default state
             // share this one handler, same as Refresh Schedule further
-            // below). Pull Master Data and Refresh Schedule are two
-            // triggers for the SAME sequential batch loader: they share
-            // one FA_NextRowIndex-style position per provider/company
-            // (see getManualBatchQueue/setManualBatchQueue in
-            // batchDataLoader.js), so whichever button is clicked, it
-            // fetches (or resumes) the current master data set and writes
-            // just the next MANUAL_REFRESH_BATCH_SIZE records to the
-            // sheet: the first click of a cycle fetches from the ERP,
-            // clears the sheet once, and writes only the first batch;
-            // every following click — Pull or Refresh, either one — writes
-            // the next batch straight from the already-fetched data (no
-            // re-pull) until everything has been written, at which point
-            // the "Pull" step is marked complete. Clicking Pull Master
-            // Data must never rewind or reset this shared position.
+            // below).
+            //
+            // Pull Master Data ALWAYS STARTS OVER. It is the "begin a new
+            // pull" button, not a "continue" button: every click discards
+            // the stored pagination cursor, wipes the sheet's master-data
+            // range, and asks the backend for the first 10 records of the
+            // first API — no matter how far a previous cycle had already
+            // progressed. Clicking it halfway through a cycle is therefore
+            // indistinguishable from clicking it for the very first time,
+            // which is what guarantees no duplicated and no skipped rows:
+            // the sheet and the cursor are reset together, in the same
+            // click, so neither can outlive the other.
+            //
+            // Refresh Schedule (further below) is the CONTINUE button: it
+            // reads that same stored cursor and asks for the NEXT 10
+            // records, appending them.
+            //
+            // Either way a click fetches exactly one batch of 10 records
+            // of ONE entity. The backend walks the entities strictly one
+            // at a time — Accounts first, 10 at a time until Accounts is
+            // completely finished, then Classes from its own first record,
+            // then Locations, then Customers, then Vendors — so no two
+            // APIs are ever fetched at the same time. The backend decides
+            // what "one batch" contains via a real MAXRESULTS=10
+            // QuickBooks request for that single entity; this handler
+            // never fetches everything and slices it client-side.
             const handlePullClick = async (event) => {
                 const button = event.currentTarget;
                 const isProv = button.id === "pullBtnProv";
@@ -4191,86 +4259,88 @@ Office.onReady(() => {
                 try {
                     document.getElementById(stepId)?.classList.add("active");
 
-                    // Shared resume-instead-of-repull pattern with Refresh
-                    // Schedule (see handleRefreshClick below) — a batch
-                    // cycle in progress is served its next batch of
-                    // records from the same already-fetched shared queue,
-                    // regardless of which button reads it; the ERP is only
-                    // called again once that shared queue is fully drained.
-                    let queue = getManualBatchQueue(provider, companyId);
-                    const queueExhausted = !queue || isManualBatchByCategoryExhausted(queue.dataByCategory, queue.cursors);
+                    DashboardService.addLog(`Pulling master data from ${providerLabel}...`);
+                    DashboardService.showStatus("Pulling data...", "success", null, provider);
 
-                    if (queueExhausted) {
-                        DashboardService.addLog(`Pulling master data from ${providerLabel}...`);
-                        DashboardService.showStatus("Pulling data...", "success", null, provider);
-
-                        const data = await ApiService.fetchMasterData(provider, companyId);
-
-                        // Start of a fresh pull cycle (the shared queue was
-                        // empty/fully drained): clear the sheet's data
-                        // range exactly once and begin a new shared batch
-                        // sequence from record 1.
-                        await ExcelService.clearMasterDataRange();
-
-                        const flatQueue = flattenAllMasterDataRecords(data);
-
-                        if (flatQueue.length === 0) {
-                            clearManualBatchQueue(provider, companyId);
-                            DashboardService.markStepComplete("pull");
-                            DashboardService.addLog("Pull: no more data available.");
-                            DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
-                            DashboardService.renderERPSection();
-                            return;
-                        }
-
-                        // A full cycle has already completed at least once for
-                        // this provider/company before, so this fresh cycle
-                        // must never leave the sheet sitting mostly empty
-                        // across several more clicks (that's the "data
-                        // disappears" bug) — write the entire freshly-fetched
-                        // set back right now, in this same click, instead of
-                        // pacing it out MANUAL_REFRESH_BATCH_SIZE records at a
-                        // time. Pacing only applies to the very first pull.
-                        if (hasManualCycleCompletedBefore(provider, companyId)) {
-                            await ExcelService.appendManualBatch(provider, flatQueue);
-                            clearManualBatchQueue(provider, companyId);
-                            markManualCycleCompleted(provider, companyId);
-                            DashboardService.markStepComplete("pull");
-                            DashboardService.addLog("Data completed.");
-                            DashboardService.showStatus("Data completed.", "success", null, provider);
-                            DashboardService.renderERPSection();
-                            return;
-                        }
-
-                        // Grouped by category (not one flattened list) so
-                        // each batch below pulls up to
-                        // MANUAL_REFRESH_BATCH_SIZE records from EVERY
-                        // category together — company, accounts, classes,
-                        // locations, customers, AND vendors all at once per
-                        // batch — instead of 10 total records from wherever
-                        // one shared cursor happens to land.
-                        queue = { dataByCategory: groupAllMasterDataRecordsByCategory(data), cursors: {} };
+                    // Pull Master Data is unconditionally a fresh start.
+                    // Drop any cursor left behind by an in-progress cycle
+                    // BEFORE the request goes out, so that even if the
+                    // fetch below fails the next click still begins at
+                    // record 1 rather than resuming a stale position.
+                    // Passing null as the cursor makes the backend reset
+                    // every API's offset/page/cursor to the beginning.
+                    const hadCursor = !!getPullPageCursor(provider, companyId);
+                    clearPullPageCursor(provider, companyId);
+                    if (hadCursor) {
+                        DashboardService.addLog("Pull Master Data: restarting from the first batch — clearing previously pulled data.");
                     }
 
-                    const { batch, cursors, isDone } =
-                        takeNextManualBatchByCategory(queue.dataByCategory, queue.cursors, MANUAL_REFRESH_BATCH_SIZE);
+                    // Every Pull click writes the cycle's first batch, so
+                    // the org header row is always seeded and the sheet is
+                    // always cleared first.
+                    const isFreshCycle = true;
 
+                    const data = await ApiService.fetchMasterData(provider, companyId, null);
+
+                    // Remove the previously pulled master data. Done after
+                    // the fetch succeeds, so a failed request never leaves
+                    // the user with an emptied sheet and nothing to show
+                    // for it.
+                    await ExcelService.clearMasterDataRange();
+
+                    // The previous cycle's "pull complete" tick no longer
+                    // describes what's on the sheet — this click has taken
+                    // it back to just the first batch.
+                    DashboardService.markStepIncomplete("pull");
+
+                    // CompanyInfo isn't paginated — the backend refetches
+                    // it on every click of a cycle, not just the first —
+                    // so only the cycle's first click seeds the org header
+                    // row; skip it on every later page to avoid a
+                    // duplicate, contentless "OrgName" row per click.
+                    const batch = flattenAllMasterDataRecords(data, { includeCompany: isFreshCycle });
+
+                    if (batch.length === 0 && isFreshCycle) {
+                        clearPullPageCursor(provider, companyId);
+                        DashboardService.markStepComplete("pull");
+                        DashboardService.addLog("Pull: no more data available.");
+                        DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
+                        DashboardService.renderERPSection();
+                        return;
+                    }
+
+                    // One click = one batch, always — no exceptions for a
+                    // repeat cycle. Exactly ONE /api/pull-master-data
+                    // request was made above (ONE QuickBooks request
+                    // inside it, for the single entity currently being
+                    // drained, max 10 records); write just that response
+                    // and stop. The next batch — whether it's the same
+                    // entity's next 10 records or the first 10 of the next
+                    // entity in the order — is only fetched on the NEXT
+                    // click, never automatically within this one.
                     await ExcelService.appendManualBatch(provider, batch);
 
-                    if (isDone) {
-                        clearManualBatchQueue(provider, companyId);
-                        markManualCycleCompleted(provider, companyId);
+                    // A response that reports "not done" but carries no
+                    // cursor cannot be resumed — storing it would leave
+                    // every later click restarting the cycle at the first
+                    // entity's first record while forever reporting
+                    // "Batch written.". Treat that as the end of the cycle
+                    // instead, so the flow can never livelock.
+                    const pullFinished = data.isDone || !data.cursor;
+
+                    if (pullFinished) {
+                        clearPullPageCursor(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
-                        setManualBatchQueue(provider, companyId, { dataByCategory: queue.dataByCategory, cursors });
+                        setPullPageCursor(provider, companyId, data.cursor);
                     }
 
-                    const pullTitle = isDone ? "Data completed." : "Batch written.";
+                    const pullTitle = pullFinished ? "Data completed." : "Batch written.";
                     // No row-range numbers (e.g. "Rows 71-80 of 150") in the
                     // user-facing detail — just the plain outcome/next step.
                     // Finished state is just "Data completed." on its own,
                     // no extra detail line.
-                    const pullDetail = isDone ? "" : "Click Pull Master Data again for the next batch.";
+                    const pullDetail = pullFinished ? "" : "Click Pull Master Data again for the next batch.";
                     DashboardService.addLog(pullDetail ? `${pullTitle} ${pullDetail}` : pullTitle);
                     DashboardService.showStatus(pullTitle, "success", pullDetail || null, provider);
                     DashboardService.renderERPSection();
@@ -4405,11 +4475,11 @@ Office.onReady(() => {
 
                 // Refresh Schedule no longer requires Setup/Pull to already
                 // be marked "complete" before it can run — Pull Master Data
-                // and Refresh are two triggers for the same shared batch
-                // loader (see handlePullClick above and
-                // batchDataLoader.js#getManualBatchQueue), so Refresh must
-                // be usable right after the very first Pull click, not just
-                // once an entire multi-batch pull cycle has fully drained.
+                // and Refresh are two triggers for the same server-driven
+                // pagination cursor (see handlePullClick above and
+                // batchDataLoader.js#getPullPageCursor), so Refresh must be
+                // usable right after the very first Pull click, not just
+                // once an entire multi-page pull cycle has fully drained.
 
                 const icon = button.querySelector(".refresh-icon");
                 if (icon) icon.classList.add("spin");
@@ -4419,97 +4489,83 @@ Office.onReady(() => {
                 const providerLabel = provider === "quickbooks" ? "QuickBooks" : "Xero";
 
                 try {
-                    // Refresh Schedule is the other trigger for the SAME
-                    // sequential batch loader as Pull Master Data (see
-                    // handlePullClick above) — they share one
-                    // FA_NextRowIndex-style position per provider/company,
-                    // not separate counters. Each click, from either
-                    // button, writes at most MANUAL_REFRESH_BATCH_SIZE
-                    // records to the sheet, resuming from wherever the
-                    // previous click (Pull OR Refresh) left off.
+                    DashboardService.addLog(`Refreshing live data from ${providerLabel}...`);
+                    DashboardService.showStatus("Refreshing...", "success", null, provider);
+
+                    // Refresh Schedule is the CONTINUE half of the pair:
+                    // it reads the same stored per-provider/company cursor
+                    // Pull Master Data writes (see handlePullClick above)
+                    // and asks for the NEXT batch of 10 records of the ONE
+                    // entity currently being drained, appending it to
+                    // what's already on the sheet — 1-10, then 11-20, then
+                    // 21-30, and so on through the fixed Accounts ->
+                    // Classes -> Locations -> Customers -> Vendors order.
                     //
-                    // If a previous click already fetched a full set of
-                    // master data and hasn't finished writing all of it
-                    // yet, this click serves the next batch straight from
-                    // that shared cached queue and does NOT call the ERP
-                    // again — only once the shared queue is fully drained
-                    // does the next click go back to the ERP for a fresh
-                    // pull.
-                    let queue = getManualBatchQueue(provider, companyId);
-                    const queueExhausted = !queue || isManualBatchByCategoryExhausted(queue.dataByCategory, queue.cursors);
+                    // Unlike Pull Master Data, Refresh never resets the
+                    // cursor. The one case where it does start over is
+                    // when there is no cursor at all — nothing has been
+                    // pulled yet, or the last cycle already finished — in
+                    // which case there is no position to continue from and
+                    // a new cycle begins at record 1, clearing the sheet
+                    // exactly as a Pull would.
+                    const priorCursor = getPullPageCursor(provider, companyId);
+                    const isFreshCycle = !priorCursor;
 
-                    if (queueExhausted) {
-                        DashboardService.addLog(`Refreshing live data from ${providerLabel}...`);
-                        DashboardService.showStatus("Refreshing...", "success", null, provider);
+                    const data = await ApiService.fetchMasterData(provider, companyId, priorCursor);
 
-                        const data = await ApiService.fetchMasterData(provider, companyId);
-
-                        // Start of a fresh cycle (the shared queue was
-                        // empty/fully drained): clear the sheet's data
-                        // range exactly once and begin a new shared batch
-                        // sequence from record 1, same as Pull Master Data.
+                    if (isFreshCycle) {
+                        // Start of a fresh cycle: clear the sheet's data
+                        // range exactly once, right before writing this
+                        // click's first page, same as Pull Master Data.
                         await ExcelService.clearMasterDataRange();
-
-                        const flatQueue = flattenAllMasterDataRecords(data);
-
-                        if (flatQueue.length === 0) {
-                            clearManualBatchQueue(provider, companyId);
-                            const timestamp = new Date().toLocaleTimeString();
-                            await ExcelService.stampLastRefreshed(timestamp);
-                            DashboardService.addLog("Refresh: no more data available.");
-                            DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
-                            return;
-                        }
-
-                        // Same fix as Pull Master Data above: once a cycle has
-                        // already completed before for this provider/company,
-                        // a fresh Refresh cycle writes the whole freshly-
-                        // fetched set back in this same click instead of
-                        // pacing it out over several more clicks, so
-                        // previously-completed data is never left visibly
-                        // diminished on the sheet.
-                        if (hasManualCycleCompletedBefore(provider, companyId)) {
-                            await ExcelService.appendManualBatch(provider, flatQueue);
-                            const doneTimestamp = new Date().toLocaleTimeString();
-                            await ExcelService.stampLastRefreshed(doneTimestamp);
-                            clearManualBatchQueue(provider, companyId);
-                            markManualCycleCompleted(provider, companyId);
-                            DashboardService.markStepComplete("pull");
-                            DashboardService.addLog("Data completed.");
-                            DashboardService.showStatus("Data completed.", "success", null, provider);
-                            return;
-                        }
-
-                        // Grouped by category — see handlePullClick above for
-                        // why: every batch pulls up to
-                        // MANUAL_REFRESH_BATCH_SIZE records from EACH
-                        // category together, matching the backend's
-                        // concurrent 10-per-API batch shape.
-                        queue = { dataByCategory: groupAllMasterDataRecordsByCategory(data), cursors: {} };
                     }
 
-                    const { batch, cursors, isDone } =
-                        takeNextManualBatchByCategory(queue.dataByCategory, queue.cursors, MANUAL_REFRESH_BATCH_SIZE);
+                    // CompanyInfo isn't paginated — refetched on every
+                    // click of a cycle, not just the first — so only the
+                    // cycle's first click seeds the org header row.
+                    const batch = flattenAllMasterDataRecords(data, { includeCompany: isFreshCycle });
 
+                    if (batch.length === 0 && isFreshCycle) {
+                        clearPullPageCursor(provider, companyId);
+                        const timestamp = new Date().toLocaleTimeString();
+                        await ExcelService.stampLastRefreshed(timestamp);
+                        DashboardService.addLog("Refresh: no more data available.");
+                        DashboardService.showStatus("No more data available.", "success", "No master data found for this company.", provider);
+                        return;
+                    }
+
+                    // One click = one batch, always — no exceptions for a
+                    // repeat cycle. Exactly ONE /api/pull-master-data
+                    // request was made above (ONE QuickBooks request
+                    // inside it, for the single entity currently being
+                    // drained, max 10 records); write just that response
+                    // and stop. The next batch — whether it's the same
+                    // entity's next 10 records or the first 10 of the next
+                    // entity in the order — is only fetched on the NEXT
+                    // click, never automatically within this one.
                     await ExcelService.appendManualBatch(provider, batch);
 
                     const timestamp = new Date().toLocaleTimeString();
                     await ExcelService.stampLastRefreshed(timestamp);
 
-                    if (isDone) {
-                        clearManualBatchQueue(provider, companyId);
-                        markManualCycleCompleted(provider, companyId);
+                    // Same no-cursor guard as handlePullClick above — see
+                    // the comment there for why a cursor-less "not done"
+                    // response has to end the cycle.
+                    const refreshFinished = data.isDone || !data.cursor;
+
+                    if (refreshFinished) {
+                        clearPullPageCursor(provider, companyId);
                         DashboardService.markStepComplete("pull");
                     } else {
-                        setManualBatchQueue(provider, companyId, { dataByCategory: queue.dataByCategory, cursors });
+                        setPullPageCursor(provider, companyId, data.cursor);
                     }
 
-                    const refreshTitle = isDone ? "Data completed." : "Batch written.";
+                    const refreshTitle = refreshFinished ? "Data completed." : "Batch written.";
                     // No row-range numbers (e.g. "Rows 71-80 of 150") in the
                     // user-facing detail — just the plain outcome/next step.
                     // Finished state is just "Data completed." on its own,
                     // no extra detail line.
-                    const refreshDetail = isDone ? "" : "Click Refresh again for the next batch.";
+                    const refreshDetail = refreshFinished ? "" : "Click Refresh again for the next batch.";
                     DashboardService.addLog(refreshDetail ? `${refreshTitle} ${refreshDetail}` : refreshTitle);
                     DashboardService.showStatus(refreshTitle, "success", refreshDetail || null, provider);
                 } catch (err) {

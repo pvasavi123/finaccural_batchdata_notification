@@ -416,7 +416,13 @@ export function clearManualBatchQueue(provider, companyId) {
  * 10 vendors + up to 10 accounts + up to 10 classes + up to 10
  * locations (+ company, which is usually just 1 record) all at once,
  * batch 2 is the next 10 of each, and so on — matching the same
- * concurrent, 10-per-API batch shape the backend already fetches with.
+ * 10-per-API batch shape the client used to pace pulls with.
+ *
+ * NOTE: this is legacy client-side pacing, kept only for callers that
+ * still slice a locally-held dataset. The live Pull Master Data /
+ * Refresh Schedule flow no longer uses it — the backend now paces the
+ * pull itself, one entity at a time (see the server-driven cursor
+ * section below).
  *
  * Each category's cursor advances and exhausts independently, exactly
  * like takeNextManualBatch: a category with fewer than `batchSize`
@@ -565,4 +571,89 @@ export function resetManualCycleCompleted(provider, companyId) {
   const all = loadCompletedOnceMap();
   delete all[manualQueueKey(provider, companyId)];
   saveCompletedOnceMap(all);
+}
+
+// ============================================================
+// Server-driven single-page pull cursor (per click)
+// ============================================================
+//
+// The backend now decides pagination itself: GET /api/pull-master-data
+// takes an optional `cursor` (the JSON-encoded value this same endpoint
+// returned as `cursor` on the previous call) and returns exactly ONE
+// page of up to MANUAL_REFRESH_BATCH_SIZE records for exactly ONE
+// entity — not the whole dataset, and not one page of every entity at
+// once. The entities are drained strictly one at a time, in the fixed
+// order Accounts -> Classes -> Locations -> Customers -> Vendors: an
+// entity is paged 10 records at a time until it is completely finished,
+// and only then does the next one begin, from its own first record.
+// Client-side slicing (takeNextManualBatch /
+// takeNextManualBatchByCategory above) is no longer what paces Pull
+// Master Data / Refresh Schedule; the click itself IS the page request.
+//
+// What's stored here is just that opaque cursor object, per
+// provider/company, so the *next* click (Pull or Refresh, either one —
+// same shared position, same reasoning as the old manual queue above)
+// asks the backend to continue from where the last click left off
+// instead of restarting at record 1. `isDone` in the response means
+// every entity is exhausted; the caller clears the stored cursor at
+// that point so a later click naturally starts a brand-new cycle.
+
+const PULL_PAGE_CURSOR_STORAGE_KEY = "fa_pull_page_cursor";
+
+function loadAllPullPageCursors() {
+  try {
+    const raw = localStorage.getItem(PULL_PAGE_CURSOR_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveAllPullPageCursors(all) {
+  try {
+    localStorage.setItem(PULL_PAGE_CURSOR_STORAGE_KEY, JSON.stringify(all));
+  } catch (_) {
+    // Storage full/unavailable — worst case the next click restarts the
+    // cycle from record 1 instead of resuming; never a correctness risk,
+    // since the backend treats a missing/empty cursor as "start fresh".
+  }
+}
+
+/**
+ * @param {string} provider
+ * @param {string} companyId
+ * @returns {object|null} the per-company, per-entity cursor object
+ *   returned by the last GET /api/pull-master-data call for this
+ *   provider/company, or null if there is no cycle in progress (either
+ *   nothing has been pulled yet, or the last cycle finished/was reset).
+ */
+export function getPullPageCursor(provider, companyId) {
+  const all = loadAllPullPageCursors();
+  return all[manualQueueKey(provider, companyId)] || null;
+}
+
+/**
+ * @param {string} provider
+ * @param {string} companyId
+ * @param {object} cursor - the `cursor` value from the last response.
+ */
+export function setPullPageCursor(provider, companyId, cursor) {
+  const all = loadAllPullPageCursors();
+  all[manualQueueKey(provider, companyId)] = cursor;
+  saveAllPullPageCursors(all);
+}
+
+/**
+ * Drops the stored pull cursor — call this once the backend reports
+ * `isDone: true` (the cycle finished naturally, so the next click starts
+ * a fresh one), or when the data it was paging through is no longer
+ * valid (disconnecting / switching company).
+ * @param {string} provider
+ * @param {string} companyId
+ */
+export function clearPullPageCursor(provider, companyId) {
+  const all = loadAllPullPageCursors();
+  delete all[manualQueueKey(provider, companyId)];
+  saveAllPullPageCursors(all);
 }

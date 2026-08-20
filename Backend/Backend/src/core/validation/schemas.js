@@ -39,11 +39,16 @@ const renameConnection = Joi.object({
     companyName: Joi.string().trim().min(1).max(255).required()
 });
 
-// GET /api/pull-master-data?companyId=...&platform=...&tier=...
+// GET /api/pull-master-data?companyId=...&platform=...&tier=...&cursor=...
+// `cursor` is the JSON-encoded pagination cursor echoed back from a
+// previous response. Declared here (rather than left undeclared) so
+// stripUnknown can't quietly drop it — the pull would then restart at
+// the first entity's first record on every click.
 const pullMasterDataQuery = Joi.object({
     companyId: Joi.string().trim().max(255).allow('', null),
     platform:  Joi.string().trim().lowercase().valid('quickbooks', 'xero').required(),
-    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
+    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro'),
+    cursor:    Joi.string().max(20000).allow('', null)
 });
 
 // GET /api/quickbooks/pull-master-data?companyId=...&tier=...
@@ -52,7 +57,8 @@ const pullMasterDataQuery = Joi.object({
 // already implied by which router this is mounted under)
 const moduleMasterDataQuery = Joi.object({
     companyId: Joi.string().trim().max(255).allow('', null),
-    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro')
+    tier:      Joi.string().trim().lowercase().valid('trial', 'basic', 'standard', 'pro').default('pro'),
+    cursor:    Joi.string().max(20000).allow('', null)
 });
 
 // GET /api/connections/stats?plan=...
