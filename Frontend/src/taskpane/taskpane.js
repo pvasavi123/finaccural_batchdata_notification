@@ -87,7 +87,13 @@ Office.onReady(() => {
             return "pro";
         },
         connectionId: null,
-        isConnected: false
+        isConnected: false,
+
+        // Guards the "Redirecting to <provider>..." transition card
+        // (launchERPOAuth) against repeat clicks while it's on screen —
+        // true from the moment Connect is clicked until the popup either
+        // opens, fails to open, or the user cancels via the close button.
+        erpAuthInProgress: false
     };
 
     // Maximum connected companies (per ERP platform) allowed for a given
@@ -2097,7 +2103,8 @@ Office.onReady(() => {
 
         showConnecting(provider) {
             AppState.currentProvider = provider;
-            const pName = provider === "quickbooks" ? "QuickBooks" : "Xero";
+            const isQB = provider === "quickbooks";
+            const brandName = isQB ? "Intuit" : "Xero";
 
             const discSection = document.getElementById("dashDisconnected");
             const provSection = document.getElementById("dashProviderSelected");
@@ -2109,8 +2116,42 @@ Office.onReady(() => {
             if (connSection) connSection.style.display = "none";
             if (connectingSection) {
                 connectingSection.style.display = "flex";
+
+                // Reset the "Redirecting to <provider>..." card to its
+                // initial state every time it's shown — provider branding,
+                // full 5-second countdown, empty progress bar, no dots lit.
+                // launchERPOAuth() drives the countdown/progress/dots from
+                // here on; this just establishes the starting state.
+                const card = document.getElementById("redirectCard");
+                if (card) card.dataset.provider = isQB ? "qb" : "xero";
+
+                const logoTextEl = document.getElementById("redirectLogoText");
+                if (logoTextEl) logoTextEl.textContent = isQB ? "qb" : "xero";
+
+                const brandNameEl = document.getElementById("redirectBrandName");
+                if (brandNameEl) brandNameEl.textContent = brandName.toUpperCase();
+
                 const textEl = document.getElementById("connectingText");
-                if (textEl) textEl.textContent = `Connecting with ${pName}...`;
+                if (textEl) textEl.textContent = `Redirecting to ${brandName}...`;
+
+                const subtextEl = document.getElementById("redirectSubtext");
+                if (subtextEl) subtextEl.textContent = `Securely connecting to your ${brandName} account`;
+
+                const progressFillEl = document.getElementById("redirectProgressFill");
+                if (progressFillEl) progressFillEl.style.width = "0%";
+
+                const countdownEl = document.getElementById("redirectCountdown");
+                if (countdownEl) countdownEl.textContent = "Please wait, opening in 5 seconds...";
+
+                document.querySelectorAll("#redirectDots .dot").forEach(dot => dot.classList.remove("active"));
+
+                // A previous attempt may have left the card on the Phase 2
+                // "waiting" view (see showRedirectWaitingState below) — a
+                // fresh Connect click always restarts on Phase 1.
+                const mainView = document.getElementById("redirectMainView");
+                const waitingView = document.getElementById("redirectWaitingView");
+                if (mainView) mainView.style.display = "";
+                if (waitingView) waitingView.style.display = "none";
             }
 
             // Active provider just changed — keep the badge/drawer, log
@@ -2118,6 +2159,36 @@ Office.onReady(() => {
             NotificationService.refreshForContext();
             this.renderActiveLogConsole();
             this.applyStepState();
+        },
+
+        /**
+         * Phase 2 of the redirect card (#dashConnecting): once the
+         * QuickBooks/Xero sign-in window or dialog is confirmed open,
+         * launchERPOAuth() calls this to swap the 5-second countdown for a
+         * lightweight "Waiting for you to sign in..." spinner — the popup
+         * is now the user's focus, so the task pane doesn't need to keep
+         * showing an "opening in N seconds" countdown that already hit
+         * zero, and it's too soon to drop to the full interactive
+         * "provider selected" dashboard since nothing is connected yet.
+         * #dashConnecting stays visible throughout; renderERPSection()
+         * (reached via onERPConnected/cancelERPConnection once the OAuth
+         * flow actually finishes) is what hides it and shows the real
+         * final state.
+         * @param {"quickbooks"|"xero"} provider
+         */
+        showRedirectWaitingState(provider) {
+            const isQB = provider === "quickbooks";
+            const brandName = isQB ? "Intuit" : "Xero";
+
+            const mainView = document.getElementById("redirectMainView");
+            const waitingView = document.getElementById("redirectWaitingView");
+            if (mainView) mainView.style.display = "none";
+            if (waitingView) waitingView.style.display = "block";
+
+            const subtextEl = document.getElementById("redirectWaitingSubtext");
+            if (subtextEl) {
+                subtextEl.textContent = `Complete sign-in with ${brandName} in the window that opened — this will update automatically.`;
+            }
         },
 
         /**
@@ -2885,10 +2956,19 @@ Office.onReady(() => {
          * @param {"quickbooks"|"xero"} provider
          */
         launchERPOAuth(provider) {
+            // Reentrancy guard — the redirect card's overlay blocks clicks
+            // underneath it once shown, but this also covers any
+            // programmatic re-entry (double keydown, a second call before
+            // the first paint) so a second attempt can never stack on top
+            // of one already in flight.
+            if (AppState.erpAuthInProgress) return;
+            AppState.erpAuthInProgress = true;
+
             this.showConnecting(provider);
             AppState.currentProvider = provider;
             const isQB = provider === "quickbooks";
             const pName = isQB ? "QuickBooks" : "Xero";
+
             const encodedMail = encodeURIComponent(AppState.userEmail || "");
             const tokenParam = AppState.jwtToken ? `&token=${encodeURIComponent(AppState.jwtToken)}` : "";
             const connectUrl = isQB
@@ -2898,87 +2978,210 @@ Office.onReady(() => {
             // Popup opening is not a completed action — only logged, never toasted.
             this.addLog(`Opening ${pName} sign-in...`);
 
-            // Note: The simulated setTimeout was removed so the UI waits for the real OAuth callback.
-
             // Guards against the completion/cancellation handling running
             // twice for the same attempt (e.g. the real "connected" message
             // arrives right as the window-closed poll also fires) — only
             // the first one wins, so exactly one outcome is ever processed
-            // per attempt.
+            // per attempt. Also clears the reentrancy guard above, whichever
+            // way this attempt ends.
             let settled = false;
             const finishOnce = (fn) => {
                 if (settled) return;
                 settled = true;
+                AppState.erpAuthInProgress = false;
                 fn();
             };
 
-            if (typeof Office !== "undefined" && Office.context && Office.context.ui) {
-                Office.context.ui.displayDialogAsync(
-                    connectUrl,
-                    { height: 60, width: 45, displayInIframe: false, promptBeforeOpen: true },
-                    (asyncResult) => {
-                        if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                            const win = window.open(connectUrl, "_blank", "width=800,height=600");
-                            if (!win) {
-                                this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
+            // Tracks whatever popup/dialog is currently open for this
+            // attempt so the close (×) button on the redirect card can
+            // shut it down too, not just the countdown.
+            let activeDialog = null;
+            let activePopupWin = null;
+            let cancelled = false;
+
+            // Once the sign-in window/dialog successfully opens, swap the
+            // card from Phase 1 (5-second countdown) to Phase 2 (a
+            // lightweight "Waiting for you to sign in..." spinner) — but
+            // only once BOTH are true: the popup is confirmed open, AND
+            // the full 5-second countdown animation has played out,
+            // whichever finishes second. Without that floor, a dialog
+            // that opens quickly (a few hundred ms on some hosts) would
+            // cut the "Redirecting..." animation short and look glitchy.
+            let countdownDone = false;
+            let popupReadyToClose = false;
+            const attemptShowWaitingState = () => {
+                if (countdownDone && popupReadyToClose) this.showRedirectWaitingState(provider);
+            };
+            const markPopupOpened = () => {
+                popupReadyToClose = true;
+                attemptShowWaitingState();
+            };
+            // If the popup/dialog definitively fails to open (blocked,
+            // etc.) there's nothing left to wait for — close the card
+            // immediately (no countdown floor) and fall back to the
+            // normal "provider selected" screen so the error status
+            // shows over a real screen instead of a stuck redirect card.
+            const closeRedirectCardOnFailure = () => this.showProviderSelected(provider);
+
+            const openERPPopup = () => {
+                if (typeof Office !== "undefined" && Office.context && Office.context.ui) {
+                    Office.context.ui.displayDialogAsync(
+                        connectUrl,
+                        { height: 60, width: 45, displayInIframe: false, promptBeforeOpen: true },
+                        (asyncResult) => {
+                            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                                const win = window.open(connectUrl, "_blank", "width=800,height=600");
+                                activePopupWin = win;
+                                if (!win) {
+                                    AppState.erpAuthInProgress = false;
+                                    closeRedirectCardOnFailure();
+                                    this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
+                                } else {
+                                    markPopupOpened();
+                                    const timer = setInterval(() => {
+                                        if (win.closed) {
+                                            clearInterval(timer);
+                                            // Window closed with no completion message received —
+                                            // treat as a plain user cancellation: no verification,
+                                            // no callback, no toast. Just restore the prior screen.
+                                            finishOnce(() => DashboardService.cancelERPConnection(provider));
+                                        }
+                                    }, 1000);
+                                }
                             } else {
-                                const timer = setInterval(() => {
-                                    if (win.closed) {
-                                        clearInterval(timer);
-                                        // Window closed with no completion message received —
-                                        // treat as a plain user cancellation: no verification,
-                                        // no callback, no toast. Just restore the prior screen.
+                                const dialog = asyncResult.value;
+                                activeDialog = dialog;
+                                markPopupOpened();
+                                dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                                    if (arg.message === "qb_connected" || arg.message === "xero_connected") {
+                                        dialog.close();
+                                        finishOnce(() => DashboardService.onERPConnected(provider));
+                                    }
+                                });
+                                // Fallback: dialog closed manually (error 12006) without a
+                                // completion message — this is a user cancellation, not a
+                                // failure. No backend verification, no callback, no toast:
+                                // just silently restore the screen the user started from.
+                                dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+                                    if (arg.error === 12006) {
                                         finishOnce(() => DashboardService.cancelERPConnection(provider));
                                     }
-                                }, 1000);
+                                });
                             }
-                        } else {
-                            const dialog = asyncResult.value;
-                            dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
-                                if (arg.message === "qb_connected" || arg.message === "xero_connected") {
-                                    dialog.close();
-                                    finishOnce(() => DashboardService.onERPConnected(provider));
-                                }
-                            });
-                            // Fallback: dialog closed manually (error 12006) without a
-                            // completion message — this is a user cancellation, not a
-                            // failure. No backend verification, no callback, no toast:
-                            // just silently restore the screen the user started from.
-                            dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
-                                if (arg.error === 12006) {
-                                    finishOnce(() => DashboardService.cancelERPConnection(provider));
-                                }
-                            });
                         }
-                    }
-                );
-            } else {
-                // Standard popup (browser context)
-                const msgHandler = (event) => {
-                    if (event.data === "qb_connected" || event.data === "xero_connected") {
-                        window.removeEventListener("message", msgHandler);
-                        finishOnce(() => DashboardService.onERPConnected(provider));
-                    }
-                };
-                window.addEventListener("message", msgHandler);
-
-                const win = window.open(connectUrl, `${provider}_auth`, "width=800,height=600");
-                if (!win) {
-                    this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
+                    );
                 } else {
-                    // Fallback: window closed manually without a completion
-                    // message — this is a user cancellation. No backend
-                    // verification, no completion callback, no toast: just
-                    // silently restore the screen the user started from.
-                    const timer = setInterval(() => {
-                        if (win.closed) {
-                            clearInterval(timer);
+                    // Standard popup (browser context)
+                    const msgHandler = (event) => {
+                        if (event.data === "qb_connected" || event.data === "xero_connected") {
                             window.removeEventListener("message", msgHandler);
-                            finishOnce(() => DashboardService.cancelERPConnection(provider));
+                            finishOnce(() => DashboardService.onERPConnected(provider));
                         }
-                    }, 1000);
+                    };
+                    window.addEventListener("message", msgHandler);
+
+                    const win = window.open(connectUrl, `${provider}_auth`, "width=800,height=600");
+                    activePopupWin = win;
+                    if (!win) {
+                        AppState.erpAuthInProgress = false;
+                        closeRedirectCardOnFailure();
+                        this.showStatus(`Unable to open ${pName} sign-in. Allow popups.`, "error", null, provider);
+                    } else {
+                        markPopupOpened();
+                        // Fallback: window closed manually without a completion
+                        // message — this is a user cancellation. No backend
+                        // verification, no completion callback, no toast: just
+                        // silently restore the screen the user started from.
+                        const timer = setInterval(() => {
+                            if (win.closed) {
+                                clearInterval(timer);
+                                window.removeEventListener("message", msgHandler);
+                                finishOnce(() => DashboardService.cancelERPConnection(provider));
+                            }
+                        }, 1000);
+                    }
                 }
+            };
+
+            // Open the OAuth popup/dialog NOW, synchronously, in the same
+            // call stack as the click that triggered launchERPOAuth().
+            //
+            // This used to be deferred behind the 5-second countdown (a
+            // setTimeout/setInterval callback firing openERPPopup() after
+            // the delay) — but Office.context.ui.displayDialogAsync, and
+            // the window.open() it and its browser-context fallback both
+            // rely on, only reliably work when triggered directly by a
+            // user gesture. Once the call happens inside an async timer
+            // callback instead of the click handler itself, the host/
+            // browser's popup blocker silently swallows it: the redirect
+            // card would finish its countdown ("Opening secure sign-in...",
+            // bar full, all dots lit) and then nothing would actually
+            // open. Calling it here keeps that gesture intact — the sign-in
+            // window/dialog is already loading in the background — while
+            // the countdown below still plays out its full 5 seconds as a
+            // purely cosmetic "Redirecting..." loading screen in the task
+            // pane, which lines up naturally with the popup's own load time.
+            openERPPopup();
+
+            // Drive the redirect card's 5-second progress bar / dot
+            // sequence / countdown text purely for show — see above, this
+            // no longer gates when the popup actually opens.
+            // TODO(review): 5000ms is currently hardcoded per the request
+            // ("wait for exactly 5 seconds") — flag if this should instead
+            // be a configurable value (e.g. sourced from config/AppState).
+            const REDIRECT_DELAY_MS = 5000;
+            const REDIRECT_TICK_MS = 1000;
+            const totalTicks = Math.round(REDIRECT_DELAY_MS / REDIRECT_TICK_MS);
+            let secondsLeft = totalTicks;
+
+            const progressFillEl = document.getElementById("redirectProgressFill");
+            const countdownEl = document.getElementById("redirectCountdown");
+            const dotEls = document.querySelectorAll("#redirectDots .dot");
+
+            const redirectTimer = setInterval(() => {
+                secondsLeft -= 1;
+                const elapsedTicks = totalTicks - secondsLeft;
+                if (progressFillEl) {
+                    progressFillEl.style.width = `${Math.min(100, Math.round((elapsedTicks / totalTicks) * 100))}%`;
+                }
+                dotEls.forEach((dot, i) => dot.classList.toggle("active", i < elapsedTicks));
+                if (countdownEl) {
+                    countdownEl.textContent = secondsLeft > 0
+                        ? `Please wait, opening in ${secondsLeft} second${secondsLeft === 1 ? "" : "s"}...`
+                        : "Opening secure sign-in...";
+                }
+                if (secondsLeft <= 0) {
+                    clearInterval(redirectTimer);
+                    countdownDone = true;
+                    attemptShowWaitingState();
+                }
+            }, REDIRECT_TICK_MS);
+
+            // Close (×) button on the redirect card — lets the user back
+            // out during the 5s hold, or while the popup itself is open,
+            // instead of being stuck waiting. The listener is bound once
+            // and always defers to whichever attempt is currently active.
+            const closeBtn = document.getElementById("redirectCloseBtn");
+            if (closeBtn && !closeBtn.dataset.bound) {
+                closeBtn.dataset.bound = "true";
+                closeBtn.addEventListener("click", () => {
+                    if (typeof DashboardService._activeRedirectCancel === "function") {
+                        DashboardService._activeRedirectCancel();
+                    }
+                });
             }
+            DashboardService._activeRedirectCancel = () => {
+                if (cancelled) return;
+                cancelled = true;
+                clearInterval(redirectTimer);
+                try {
+                    if (activeDialog && typeof activeDialog.close === "function") activeDialog.close();
+                } catch (_) { /* dialog already gone — nothing to clean up */ }
+                try {
+                    if (activePopupWin && !activePopupWin.closed) activePopupWin.close();
+                } catch (_) { /* popup already gone — nothing to clean up */ }
+                finishOnce(() => DashboardService.cancelERPConnection(provider));
+            };
         },
 
         /**

@@ -3829,3 +3829,217 @@ input:checked + .toggle-slider::before {
   justify-content: center;
   gap: 6px;
 }
+
+/* ============================================================
+   ERP OAuth "Redirecting to <provider>..." transition modal
+   (#dashConnecting) — shown by DashboardService.showConnecting()/
+   launchERPOAuth() in taskpane.js before the QuickBooks/Xero OAuth
+   popup opens. Branding is switched via the [data-provider] attribute
+   on .redirect-card ("qb" | "xero"); everything below reads off the
+   --redirect-accent/--redirect-accent-dark custom properties so the
+   two providers share one set of rules.
+   ============================================================ */
+.redirect-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 2000;
+  padding: 16px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+}
+
+.redirect-card {
+  --redirect-accent: #2CA01C;
+  --redirect-accent-dark: #16a34a;
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.25), 0 8px 16px -8px rgba(0, 0, 0, 0.15);
+  width: 100%;
+  max-width: 300px;
+  margin: auto;
+  padding: 30px 22px 20px;
+  box-sizing: border-box;
+  text-align: center;
+  animation: modalScaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.redirect-card[data-provider="xero"] {
+  --redirect-accent: #13B5EA;
+  --redirect-accent-dark: #0ea5c4;
+}
+
+.redirect-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.redirect-close-btn:hover {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.redirect-logo-badge {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--redirect-accent);
+  box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.2);
+}
+
+.redirect-logo-badge span {
+  color: #ffffff;
+  font-family: 'Inter', sans-serif;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.redirect-brand-name {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #172b56;
+  margin: 0 0 16px;
+}
+
+.redirect-illustration {
+  position: relative;
+  width: 100%;
+  height: 88px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.redirect-lock-bg {
+  fill: var(--redirect-accent);
+}
+
+.redirect-illustration .spark {
+  position: absolute;
+  color: #cbd5e1;
+  animation: redirectSparkle 2s ease-in-out infinite;
+}
+
+.redirect-illustration .spark--1 { top: 0; left: 6px; animation-delay: 0s; }
+.redirect-illustration .spark--2 { top: 4px; right: 8px; animation-delay: 0.6s; }
+.redirect-illustration .spark--3 { bottom: 2px; left: 20px; animation-delay: 1.2s; }
+
+@keyframes redirectSparkle {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.redirect-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0F2D6B;
+  margin: 0 0 4px;
+}
+
+.redirect-subtext {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 18px;
+}
+
+.redirect-progress-track {
+  width: 100%;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.redirect-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--redirect-accent-dark), var(--redirect-accent));
+  transition: width 1s linear;
+}
+
+.redirect-countdown {
+  font-size: 11px;
+  color: #94a3b8;
+  margin: 0 0 14px;
+}
+
+.redirect-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.redirect-dots .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  transition: background-color 0.3s ease, transform 0.3s ease;
+}
+
+.redirect-dots .dot.active {
+  background: var(--redirect-accent);
+  transform: scale(1.25);
+}
+
+.redirect-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #94a3b8;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 12px;
+}
+
+.redirect-footer svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* Phase 2 of the redirect card — "Waiting for you to sign in..." spinner,
+   shown once the popup/dialog is confirmed open (see #redirectWaitingView
+   in taskpane.html and DashboardService.showRedirectWaitingState() in
+   taskpane.js). Reuses the existing global @keyframes spin. */
+.redirect-spinner {
+  width: 44px;
+  height: 44px;
+  margin: 4px auto 22px;
+  border: 4px solid #e2e8f0;
+  border-top-color: var(--redirect-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}

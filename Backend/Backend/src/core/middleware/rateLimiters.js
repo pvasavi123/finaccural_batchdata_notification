@@ -34,10 +34,20 @@ function buildLimiter({ windowMs, max, message }) {
 }
 
 /** General safety net for every /api/* route. Generous — this is not the
- *  primary defense, just a backstop against runaway/looping clients. */
+ *  primary defense, just a backstop against runaway/looping clients.
+ *
+ *  In development every client (the Excel task pane's own background
+ *  polling, manual browser testing, the OAuth popups, curl/Postman, …)
+ *  shares one IP — localhost — so they all count against the SAME
+ *  bucket. That made 300/min trip during ordinary manual QA (see the
+ *  ERR_LIMIT_REACHED hit on /api/payments/checkout), not just runaway
+ *  loops. Raised well above normal traffic for non-production so it
+ *  still catches an actual infinite-request bug without punishing a
+ *  single developer's machine acting as every client at once; the
+ *  production limit is untouched. */
 const generalLimiter = buildLimiter({
     windowMs: 60 * 1000,     // 1 minute
-    max:      300,           // 300 requests/min/IP across the whole API
+    max:      process.env.NODE_ENV === 'production' ? 300 : 3000,
     message:  'Too many requests. Please slow down and try again shortly.'
 });
 
